@@ -46,7 +46,9 @@ process.env.ALLOW_PREVIEW_RESET_CODE = "1";
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
-const { storage } = await import("../server/storage");
+const storageMod = await import("../server/storage");
+await storageMod.initStorage();
+const { storage } = storageMod;
 const { hasUnlimitedCredits } = await import("../shared/entitlements");
 
 const app = express();
@@ -300,9 +302,9 @@ try {
   /* -------- 7. Unlimited entitlement survives reset -------- */
   // Seed unlimited account if needed (fresh DB)
   const { hashPassword } = await import("../server/password");
-  let owner = storage.getUserByEmail(unlimitedEmail);
+  let owner = await storage.getUserByEmail(unlimitedEmail);
   if (!owner) {
-    owner = storage.createUser({
+    owner = await storage.createUser({
       full_name: "Alex Roqueta",
       email: unlimitedEmail,
       role: "user",
@@ -311,7 +313,7 @@ try {
       password_hash: hashPassword(UNLIMITED_PASSWORD),
     });
   } else if (!owner.password_hash) {
-    storage.setUserPassword(owner.id, hashPassword(UNLIMITED_PASSWORD));
+    await storage.setUserPassword(owner.id, hashPassword(UNLIMITED_PASSWORD));
   }
 
   const ownerForgot = await request("POST", "/api/me/forgot-password", { email: unlimitedEmail });

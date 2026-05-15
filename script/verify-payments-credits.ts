@@ -50,7 +50,9 @@ process.chdir(tmpDir);
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
-const { storage } = await import("../server/storage");
+const storageMod = await import("../server/storage");
+await storageMod.initStorage();
+const { storage, _setAnalysisLockedForTest } = storageMod;
 const { hashPassword } = await import("../server/password");
 
 const app = express();
@@ -326,9 +328,9 @@ try {
   // Admin sets credits; ledger should record a single admin_adjustment row.
   await request("POST", "/api/me/logout");
   // Ensure the seeded admin password is set.
-  const adminUser = storage.getUserByEmail(adminEmail);
+  const adminUser = await storage.getUserByEmail(adminEmail);
   if (adminUser && !adminUser.password_hash) {
-    storage.setUserPassword(adminUser.id, hashPassword(adminPassword));
+    await storage.setUserPassword(adminUser.id, hashPassword(adminPassword));
   }
   const adminSignin = await request("POST", "/api/me/signin", {
     email: adminEmail,
@@ -336,7 +338,7 @@ try {
   });
   assert(adminSignin.status === 200, "admin can sign in", adminSignin);
   // Target the locked user we just unlocked.
-  const lockedUserRow = storage.getUserByEmail(lockedEmail);
+  const lockedUserRow = await storage.getUserByEmail(lockedEmail);
   assert(!!lockedUserRow, "admin can resolve the locked-user target");
   const adminSet = await request("POST", "/api/users/set-credits", {
     user_id: lockedUserRow!.id,
@@ -372,9 +374,9 @@ try {
 
   /* ---------- 10. Unlimited entitlement bypasses ledger on unlock ---------- */
   // Ensure unlimited account has known password.
-  const existingUnlimited = storage.getUserByEmail(unlimitedEmail);
+  const existingUnlimited = await storage.getUserByEmail(unlimitedEmail);
   if (!existingUnlimited) {
-    storage.createUser({
+    await storage.createUser({
       full_name: "Alex Roqueta",
       email: unlimitedEmail,
       role: "user",
@@ -383,7 +385,7 @@ try {
       password_hash: hashPassword(unlimitedPassword),
     });
   } else if (!existingUnlimited.password_hash) {
-    storage.setUserPassword(existingUnlimited.id, hashPassword(unlimitedPassword));
+    await storage.setUserPassword(existingUnlimited.id, hashPassword(unlimitedPassword));
   }
   await request("POST", "/api/me/logout");
   const signinUnlimited = await request("POST", "/api/me/signin", {
@@ -405,22 +407,19 @@ try {
   );
   // Force-lock to test the unlock path under entitlement.
   const forcedId = unlimitedAnalysis.json.id as number;
-  // Use the storage API directly (we share the process) to flip the flag.
-  const { db } = await import("../server/storage");
-  const { analyses } = await import("../shared/schema");
-  const { eq } = await import("drizzle-orm");
-  db.update(analyses).set({ is_locked: true }).where(eq(analyses.id, forcedId)).run();
-  const txsBefore = storage
-    .listCreditTransactions(existingUnlimited?.id ?? storage.getUserByEmail(unlimitedEmail)!.id)
-    .length;
+  // Flip the flag through the test-only storage helper. Works against
+  // both SQLite and Postgres backends.
+  await _setAnalysisLockedForTest(forcedId, true);
+  const unlimitedUserRow =
+    existingUnlimited ?? (await storage.getUserByEmail(unlimitedEmail))!;
+  const txsBefore = (await storage.listCreditTransactions(unlimitedUserRow.id)).length;
   const unlimitedUnlock = await request("POST", `/api/analyses/${forcedId}/unlock`);
   assert(
     unlimitedUnlock.status === 200 && unlimitedUnlock.json?.is_locked === false,
     "unlimited user can unlock a forced-locked analysis",
   );
-  const txsAfter = storage.listCreditTransactions(
-    storage.getUserByEmail(unlimitedEmail)!.id,
-  ).length;
+  const unlimitedUserAfter = (await storage.getUserByEmail(unlimitedEmail))!;
+  const txsAfter = (await storage.listCreditTransactions(unlimitedUserAfter.id)).length;
   assert(
     txsAfter === txsBefore,
     "unlimited unlock does NOT append a ledger row (entitlement is independent of balance)",

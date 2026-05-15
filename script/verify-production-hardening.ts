@@ -61,7 +61,9 @@ process.env.NODE_ENV = "development";
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
-const { storage } = await import("../server/storage");
+const storageMod = await import("../server/storage");
+await storageMod.initStorage();
+const { storage } = storageMod;
 const { hashPassword } = await import("../server/password");
 const { __resetRateLimits } = await import("../server/rate-limit");
 
@@ -138,7 +140,7 @@ try {
   const userAId = signupA.json?.id as number;
   // grant some credits so the unlock path can be exercised
   // (admin grant via storage directly — outside the API)
-  storage.setUserCredits(userAId, 5);
+  await storage.setUserCredits(userAId, 5);
 
   // Create an analysis as A
   const analyzeA = await request("POST", "/api/analyses", {
@@ -193,7 +195,7 @@ try {
   );
 
   // A's record still intact
-  const stillThere = storage.getAnalysis(analysisAId);
+  const stillThere = await storage.getAnalysis(analysisAId);
   assert(!!stillThere, "A's analysis was NOT deleted by B's request");
 
   // B's listing must NOT include A's analysis
@@ -207,7 +209,7 @@ try {
   console.log("\n--- Owner-gating: resumes ---");
   const otherResumeDel = await request("DELETE", `/api/resumes/${resumeAId}`);
   assert(otherResumeDel.status === 404, "user B DELETE /api/resumes/:id of A's resume is 404");
-  const stillResume = storage.getResume(resumeAId);
+  const stillResume = await storage.getResume(resumeAId);
   assert(!!stillResume, "A's resume was NOT deleted by B's request");
 
   const otherPrefill = await request("POST", "/api/resumes/prefill", {
@@ -226,7 +228,7 @@ try {
   // Create admin directly through storage (the API has no \"create
   // admin\" endpoint by design \u2014 admins are provisioned out of band).
   const adminEmail = `admin_${stamp}@example.com`;
-  storage.createUser({
+  await storage.createUser({
     full_name: "Admin User",
     email: adminEmail,
     role: "admin",
@@ -342,7 +344,7 @@ try {
   // Seed an account into the SAME db so the prod-mode forgot-password
   // has a real target.
   const prodEmail = `prod_${stamp}@example.com`;
-  storage.createUser({
+  await storage.createUser({
     full_name: "Prod Mode User",
     email: prodEmail,
     role: "user",

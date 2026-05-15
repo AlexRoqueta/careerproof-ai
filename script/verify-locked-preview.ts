@@ -39,7 +39,9 @@ process.chdir(tmpDir);
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
-const { storage } = await import("../server/storage");
+const storageMod = await import("../server/storage");
+await storageMod.initStorage();
+const { storage } = storageMod;
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -199,9 +201,9 @@ try {
   /* -------- 4. Unlimited user gets the full unlocked body -------- */
   // Make sure the unlimited user exists with a known password, then sign in.
   const { hashPassword } = await import("../server/password");
-  const existingUnlimited = storage.getUserByEmail(unlimitedEmail);
+  const existingUnlimited = await storage.getUserByEmail(unlimitedEmail);
   if (!existingUnlimited) {
-    storage.createUser({
+    await storage.createUser({
       full_name: "Alex Roqueta",
       email: unlimitedEmail,
       role: "user",
@@ -210,7 +212,7 @@ try {
       password_hash: hashPassword(SEEDED_OWNER_PASSWORD),
     });
   } else if (!existingUnlimited.password_hash) {
-    storage.setUserPassword(existingUnlimited.id, hashPassword(SEEDED_OWNER_PASSWORD));
+    await storage.setUserPassword(existingUnlimited.id, hashPassword(SEEDED_OWNER_PASSWORD));
   }
   await request("POST", "/api/me/logout");
   const signinUnlimited = await request("POST", "/api/me/signin", {

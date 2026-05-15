@@ -150,10 +150,10 @@ function setCurrentUserId(id: number | null) {
  * full user row if the session is valid and the user still exists,
  * or null otherwise. Always-fresh lookup so role changes (admin
  * promotion / demotion) take effect immediately. */
-function getActor(): { id: number; role: string; email: string } | null {
+async function getActor(): Promise<{ id: number; role: string; email: string } | null> {
   const id = getCurrentUserId();
   if (id == null) return null;
-  const u = storage.getUser(id);
+  const u = await storage.getUser(id);
   if (!u) return null;
   return { id: u.id, role: u.role, email: u.email };
 }
@@ -226,10 +226,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const limitUnlock = rateLimit({ scope: "unlock", max: 20, windowMs: 60_000, keyFn: keyByIp });
 
   /* --------------- Identity / Auth simulation --------------- */
-  app.get("/api/me", (_req: Request, res: Response) => {
+  app.get("/api/me", async (_req: Request, res: Response) => {
     const id = getCurrentUserId();
     if (id == null) return res.status(401).json({ error: "Not signed in" });
-    const user = storage.getUser(id);
+    const user = await storage.getUser(id);
     if (!user) {
       // Session points at a user that no longer exists — clear it.
       setCurrentUserId(null);
@@ -243,14 +243,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // HTTP 401 (Unauthorized).
   const INVALID_CREDENTIALS = "Invalid email or password";
 
-  app.post("/api/me/signin", limitSignin, (req: Request, res: Response) => {
+  app.post("/api/me/signin", limitSignin, async (req: Request, res: Response) => {
     const parsed = signInRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Email and password are required" });
     }
     const email = parsed.data.email.trim().toLowerCase();
     const password = parsed.data.password;
-    const user = storage.getUserByEmail(email);
+    const user = await storage.getUserByEmail(email);
     if (!user) {
       // Run a dummy verify to keep response timing close to the valid
       // path. Result is ignored.
@@ -275,7 +275,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(sanitizeUserForResponse(user));
   });
 
-  app.post("/api/me/signup", limitSignup, (req: Request, res: Response) => {
+  app.post("/api/me/signup", limitSignup, async (req: Request, res: Response) => {
     const parsed = signUpRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       // Surface the first validation message so the inline alert is
@@ -285,7 +285,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const full_name = parsed.data.full_name.trim();
     const email = parsed.data.email.trim().toLowerCase();
-    if (storage.getUserByEmail(email)) {
+    if (await storage.getUserByEmail(email)) {
       return res.status(409).json({ error: "An account with that email already exists" });
     }
     // New accounts start with zero credits. Entitlement to a free quota
@@ -294,7 +294,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // user can still run analyses, but every report they generate is saved
     // with is_locked=true so the readable body is gated until they buy
     // credits or are otherwise entitled.
-    const user = storage.createUser({
+    const user = await storage.createUser({
       full_name,
       email,
       role: "user",
@@ -352,13 +352,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return String(randomInt(0, 1_000_000)).padStart(6, "0");
   }
 
-  app.post("/api/me/forgot-password", limitForgot, (req: Request, res: Response) => {
+  app.post("/api/me/forgot-password", limitForgot, async (req: Request, res: Response) => {
     const parsed = forgotPasswordRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "A valid email is required" });
     }
     const email = parsed.data.email.trim().toLowerCase();
-    const user = storage.getUserByEmail(email);
+    const user = await storage.getUserByEmail(email);
 
     // Generic public response — SAME for unknown emails and known
     // emails. The only side effect of an unknown email is no DB write.
@@ -380,7 +380,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const code = generateResetCode();
       const now = new Date();
       const expires = new Date(now.getTime() + RESET_CODE_TTL_MINUTES * 60_000);
-      storage.createPasswordReset({
+      await storage.createPasswordReset({
         user_id: user.id,
         code_hash: hashPassword(code),
         created_at: now.toISOString(),
@@ -395,7 +395,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(genericResponse);
   });
 
-  app.post("/api/me/reset-password", limitReset, (req: Request, res: Response) => {
+  app.post("/api/me/reset-password", limitReset, async (req: Request, res: Response) => {
     const parsed = resetPasswordRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       const first = parsed.error.issues[0];
@@ -409,14 +409,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // "the reset code is invalid or has expired".
     const INVALID = { error: "Reset code is invalid or has expired" };
 
-    const user = storage.getUserByEmail(email);
+    const user = await storage.getUserByEmail(email);
     if (!user) {
       // Run a dummy verify to flatten timing.
       verifyPassword(submittedCode, "scrypt$16384$8$1$00$00");
       return res.status(400).json(INVALID);
     }
 
-    const active = storage.listActivePasswordResetsForUser(user.id);
+    const active = await storage.listActivePasswordResetsForUser(user.id);
     const now = Date.now();
     let matched: (typeof active)[number] | undefined;
     for (const r of active) {
@@ -432,20 +432,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const usedAt = new Date().toISOString();
-    storage.markPasswordResetUsed(matched.id, usedAt);
+    await storage.markPasswordResetUsed(matched.id, usedAt);
     // Invalidate any other still-active codes for the same user so a
     // previously requested code cannot be redeemed after the password
     // has already been reset.
-    storage.invalidateOtherPasswordResets(user.id, matched.id, usedAt);
+    await storage.invalidateOtherPasswordResets(user.id, matched.id, usedAt);
 
-    const updated = storage.setUserPassword(user.id, hashPassword(parsed.data.password));
+    const updated = await storage.setUserPassword(user.id, hashPassword(parsed.data.password));
     if (!updated) return res.status(500).json({ error: "Failed to reset password" });
 
     setCurrentUserId(updated.id);
     res.json(sanitizeUserForResponse(updated));
   });
 
-  app.post("/api/me/set-password", limitSetPassword, (req: Request, res: Response) => {
+  app.post("/api/me/set-password", limitSetPassword, async (req: Request, res: Response) => {
     // First-time password setup for an existing account that has no
     // password_hash. We only allow this when the account currently has
     // no password. Setting/changing a password for an account that
@@ -457,26 +457,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ error: first?.message ?? "Invalid input" });
     }
     const email = parsed.data.email.trim().toLowerCase();
-    const user = storage.getUserByEmail(email);
+    const user = await storage.getUserByEmail(email);
     if (!user) return res.status(404).json({ error: "No account found for that email" });
     if (user.password_hash) {
       return res
         .status(409)
         .json({ error: "This account already has a password. Sign in to continue." });
     }
-    const updated = storage.setUserPassword(user.id, hashPassword(parsed.data.password));
+    const updated = await storage.setUserPassword(user.id, hashPassword(parsed.data.password));
     if (!updated) return res.status(500).json({ error: "Failed to set password" });
     setCurrentUserId(updated.id);
     res.json(sanitizeUserForResponse(updated));
   });
 
-  app.post("/api/me/switch", (req: Request, res: Response) => {
+  app.post("/api/me/switch", async (req: Request, res: Response) => {
     // Admin-only utility, gated by the current session.
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
     const id = Number(req.body?.user_id);
-    const user = storage.getUser(id);
+    const user = await storage.getUser(id);
     if (!user) return res.status(404).json({ error: "User not found" });
     setCurrentUserId(id);
     res.json(sanitizeUserForResponse(user));
@@ -490,30 +490,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Admin --------------- */
-  app.get("/api/users", (_req: Request, res: Response) => {
+  app.get("/api/users", async (_req: Request, res: Response) => {
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
-    res.json(storage.listUsers().map(sanitizeUserForResponse));
+    const all = await storage.listUsers();
+    res.json(all.map(sanitizeUserForResponse));
   });
 
-  app.post("/api/users/set-credits", (req: Request, res: Response) => {
+  app.post("/api/users/set-credits", async (req: Request, res: Response) => {
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
     const parsed = setCreditsSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const target = storage.getUser(parsed.data.user_id);
+    const target = await storage.getUser(parsed.data.user_id);
     if (!target) return res.status(404).json({ error: "User not found" });
     const previous = target.credits;
     const next = parsed.data.credits;
-    const updated = storage.setUserCredits(parsed.data.user_id, next);
+    const updated = await storage.setUserCredits(parsed.data.user_id, next);
     if (!updated) return res.status(404).json({ error: "User not found" });
     // Admin balance changes are recorded as a single delta on the
     // ledger so the transaction history is complete. A no-op set
     // (same value) skips the ledger row.
     if (next !== previous) {
-      storage.appendCreditTransaction({
+      await storage.appendCreditTransaction({
         user_id: target.id,
         amount_delta: next - previous,
         balance_after: next,
@@ -527,13 +528,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Resumes --------------- */
-  app.get("/api/resumes", (_req: Request, res: Response) => {
+  app.get("/api/resumes", async (_req: Request, res: Response) => {
     const id = getCurrentUserId();
     if (id == null) return res.status(401).json({ error: "Not signed in" });
-    res.json(storage.listResumes(id));
+    res.json(await storage.listResumes(id));
   });
 
-  app.post("/api/resumes", (req: Request, res: Response) => {
+  app.post("/api/resumes", async (req: Request, res: Response) => {
     const id = getCurrentUserId();
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     const parsed = uploadResumeSchema.safeParse(req.body);
@@ -550,7 +551,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       extractedFromPdf ??
       `${base}\nSenior Professional with multi-year experience across product, technology, and client-facing roles.\n\nSelected Experience\n• Led cross-functional initiatives delivering measurable outcomes.\n• Collaborated with engineering, design, and operations stakeholders.\n• Owned reporting, planning, and quality assurance for major workstreams.\n\nSkills\n• Communication, project management, analytical thinking, AI-assisted workflows.\n\nEducation\n• Bachelor's degree, relevant field.\n\n(Extracted text generated by the in-app fallback. Upload a text-readable PDF for more specific resume parsing.)`;
 
-    const resume = storage.createResume({
+    const resume = await storage.createResume({
       created_date: new Date().toISOString(),
       created_by: id,
       filename,
@@ -564,25 +565,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(resume);
   });
 
-  app.delete("/api/resumes/:id", (req: Request, res: Response) => {
-    const actor = getActor();
+  app.delete("/api/resumes/:id", async (req: Request, res: Response) => {
+    const actor = await getActor();
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
-    const r = storage.getResume(id);
+    const r = await storage.getResume(id);
     if (!r) return res.status(404).json({ error: "Not found" });
     if (r.created_by !== actor.id && actor.role !== "admin") {
       return res.status(404).json({ error: "Not found" });
     }
-    storage.deleteResume(id);
+    await storage.deleteResume(id);
     res.json({ ok: true });
   });
 
-  app.post("/api/resumes/prefill", (req: Request, res: Response) => {
-    const actor = getActor();
+  app.post("/api/resumes/prefill", async (req: Request, res: Response) => {
+    const actor = await getActor();
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const parsed = prefillFromResumeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const resume = storage.getResume(parsed.data.resume_id);
+    const resume = await storage.getResume(parsed.data.resume_id);
     if (!resume) return res.status(404).json({ error: "Resume not found" });
     if (resume.created_by !== actor.id && actor.role !== "admin") {
       return res.status(404).json({ error: "Resume not found" });
@@ -600,17 +601,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Analyses --------------- */
-  app.get("/api/analyses", (_req: Request, res: Response) => {
+  app.get("/api/analyses", async (_req: Request, res: Response) => {
     const id = getCurrentUserId();
     if (id == null) return res.status(401).json({ error: "Not signed in" });
-    res.json(storage.listAnalyses(id).map(sanitizeAnalysisForResponse));
+    const list = await storage.listAnalyses(id);
+    res.json(list.map(sanitizeAnalysisForResponse));
   });
 
-  app.get("/api/analyses/:id", (req: Request, res: Response) => {
-    const actor = getActor();
+  app.get("/api/analyses/:id", async (req: Request, res: Response) => {
+    const actor = await getActor();
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
-    const a = storage.getAnalysis(id);
+    const a = await storage.getAnalysis(id);
     // Collapse "not found" and "not yours" into the same 404 so an
     // attacker cannot enumerate analysis ids belonging to other users.
     if (!a) return res.status(404).json({ error: "Not found" });
@@ -620,16 +622,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(sanitizeAnalysisForResponse(a));
   });
 
-  app.delete("/api/analyses/:id", (req: Request, res: Response) => {
-    const actor = getActor();
+  app.delete("/api/analyses/:id", async (req: Request, res: Response) => {
+    const actor = await getActor();
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
-    const a = storage.getAnalysis(id);
+    const a = await storage.getAnalysis(id);
     if (!a) return res.status(404).json({ error: "Not found" });
     if (a.created_by !== actor.id && actor.role !== "admin") {
       return res.status(404).json({ error: "Not found" });
     }
-    storage.deleteAnalysis(id);
+    await storage.deleteAnalysis(id);
     res.json({ ok: true });
   });
 
@@ -640,12 +642,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    *
    * Paying users with zero credits get a 402 with a clear, actionable
    * error so the frontend can route them to the Buy Credits flow. */
-  app.post("/api/analyses/:id/unlock", limitUnlock, (req: Request, res: Response) => {
+  app.post("/api/analyses/:id/unlock", limitUnlock, async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
-    const analysis = storage.getAnalysis(id);
+    const analysis = await storage.getAnalysis(id);
     // Owner-or-admin gate. A non-owner unlocking another user's report
     // must be indistinguishable from "that analysis does not exist" to
     // avoid leaking the id space.
@@ -662,9 +664,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
     if (!unlimited) {
-      const updated = storage.decrementCredits(me.id);
+      const updated = await storage.decrementCredits(me.id);
       // Ledger row for the spend — always exactly -1.
-      storage.appendCreditTransaction({
+      await storage.appendCreditTransaction({
         user_id: me.id,
         amount_delta: -1,
         balance_after: updated?.credits ?? Math.max(0, me.credits - 1),
@@ -674,7 +676,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         created_at: new Date().toISOString(),
       });
     }
-    const unlocked = storage.unlockAnalysis(id);
+    const unlocked = await storage.unlockAnalysis(id);
     res.json(unlocked);
   });
 
@@ -682,7 +684,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = analyzeRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
     // Credit gate: admins and specifically entitled emails have unlimited
@@ -703,7 +705,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     let resume_text: string | null = null;
     if (parsed.data.resume_id) {
-      const r = storage.getResume(parsed.data.resume_id);
+      const r = await storage.getResume(parsed.data.resume_id);
       if (r) resume_text = r.extracted_text;
     }
 
@@ -718,9 +720,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Deduct credits only for paying users who actually had credits to
       // spend. Locked / unlimited paths skip the decrement.
-      if (!unlimited && !willLock) storage.decrementCredits(me.id);
+      if (!unlimited && !willLock) await storage.decrementCredits(me.id);
 
-      const saved = storage.createAnalysis({
+      const saved = await storage.createAnalysis({
         created_date: new Date().toISOString(),
         created_by: me.id,
         job_title: parsed.data.job_title,
@@ -774,7 +776,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = createCheckoutSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid package" });
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
     const pkg = findCreditPackage(parsed.data.package_id);
@@ -850,7 +852,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
      *      circuits the grant.
      */
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
     const session_id = String(req.body?.session_id ?? "");
@@ -865,11 +867,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reference = `${verify.provider}:${session_id}`;
       // Idempotency — if this session already produced a ledger row,
       // return the current user without granting again.
-      const existing = storage
-        .listCreditTransactions(me.id)
-        .find((t) => t.reference === reference && t.reason === "purchase");
+      const txs = await storage.listCreditTransactions(me.id);
+      const existing = txs.find((t) => t.reference === reference && t.reason === "purchase");
       if (existing) {
-        const current = storage.getUser(me.id);
+        const current = await storage.getUser(me.id);
         return res.json({
           user: sanitizeUserForResponse(current ?? me),
           credits_added: 0,
@@ -877,8 +878,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           package: verify.package,
         });
       }
-      const updated = storage.setUserCredits(me.id, me.credits + verify.package.credits);
-      storage.appendCreditTransaction({
+      const updated = await storage.setUserCredits(me.id, me.credits + verify.package.credits);
+      await storage.appendCreditTransaction({
         user_id: me.id,
         amount_delta: verify.package.credits,
         balance_after: updated?.credits ?? me.credits + verify.package.credits,
@@ -911,21 +912,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Credits: ledger + promo + admin grant --------------- */
-  app.get("/api/credits/transactions", (_req: Request, res: Response) => {
+  app.get("/api/credits/transactions", async (_req: Request, res: Response) => {
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
-    const txs: CreditTransaction[] = storage.listCreditTransactions(me.id);
+    const txs: CreditTransaction[] = await storage.listCreditTransactions(me.id);
     res.json({ transactions: txs });
   });
 
-  app.post("/api/credits/redeem-code", limitPromo, (req: Request, res: Response) => {
+  app.post("/api/credits/redeem-code", limitPromo, async (req: Request, res: Response) => {
     const parsed = redeemPromoCodeSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Promo code is required" });
     }
     const meId = getCurrentUserId();
-    const me = meId != null ? storage.getUser(meId) : undefined;
+    const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
     /* Case-insensitive normalization on the server. The client may
@@ -948,15 +949,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     // One redemption per user per code, enforced via the ledger.
-    if (storage.hasUserRedeemedPromo(me.id, FREE_CREDITS_PROMO_CODE)) {
+    if (await storage.hasUserRedeemedPromo(me.id, FREE_CREDITS_PROMO_CODE)) {
       return res.status(409).json({
         error: "This promo code has already been redeemed on your account.",
         reason: "already_redeemed",
       });
     }
 
-    const updated = storage.setUserCredits(me.id, me.credits + FREE_CREDITS_PROMO_AMOUNT);
-    storage.appendCreditTransaction({
+    const updated = await storage.setUserCredits(me.id, me.credits + FREE_CREDITS_PROMO_AMOUNT);
+    try {
+      await storage.appendCreditTransaction({
       user_id: me.id,
       amount_delta: FREE_CREDITS_PROMO_AMOUNT,
       balance_after: updated?.credits ?? me.credits + FREE_CREDITS_PROMO_AMOUNT,
@@ -964,7 +966,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       reference: FREE_CREDITS_PROMO_CODE,
       provider: null,
       created_at: new Date().toISOString(),
-    });
+      });
+    } catch (err: any) {
+      // Database-level idempotency guard: if the partial unique index on
+      // (user_id, reference) where reason='promo' rejects this insert,
+      // roll back the just-applied credit grant and surface the same
+      // "already redeemed" error the application-level check returns.
+      // Postgres surfaces this as error code 23505 (unique_violation).
+      if (err?.code === "23505" || /UNIQUE/i.test(String(err?.message ?? ""))) {
+        await storage.setUserCredits(me.id, me.credits);
+        return res.status(409).json({
+          error: "This promo code has already been redeemed on your account.",
+          reason: "already_redeemed",
+        });
+      }
+      throw err;
+    }
     res.json({
       user: sanitizeUserForResponse(updated),
       credits_added: FREE_CREDITS_PROMO_AMOUNT,

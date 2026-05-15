@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { validateConfigAtStartup } from "./config";
+import { initStorage } from "./storage";
 
 const app = express();
 const httpServer = createServer(app);
@@ -79,6 +80,11 @@ app.use((req, res, next) => {
    * BEFORE any traffic is accepted. See server/config.ts for the
    * exact rules. Preview builds always continue with a warning. */
   validateConfigAtStartup();
+  /* Initialize the storage backend BEFORE registering routes. This
+   * picks SQLite (default) or Postgres (when DATABASE_URL points at a
+   * postgres database), runs CREATE TABLE IF NOT EXISTS migrations,
+   * and bootstraps the seeded preview accounts. */
+  await initStorage();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
