@@ -75,7 +75,14 @@ interface CompleteResponse {
   user: { credits: number };
   credits_added: number;
   already_processed: boolean;
-  package: CreditPackage;
+  /* Live providers (Stripe): the redirect handler does NOT grant
+   * credits — the webhook is authoritative. When `pending` is true,
+   * the buyer just returned from the provider and the webhook may not
+   * have fired yet. The client should poll /api/me + ledger until
+   * the new balance appears, then surface success. */
+  pending?: boolean;
+  provider?: string;
+  package?: CreditPackage;
 }
 
 export default function Credits() {
@@ -87,8 +94,14 @@ export default function Credits() {
     | { kind: "success"; credits: number; already: boolean }
     | { kind: "cancel" }
     | { kind: "error"; message: string }
+    | { kind: "pending"; provider: string }
     | null
   >(null);
+  /* Tracks the Stripe checkout session id we're currently polling for
+   * webhook fulfillment. Cleared once the new ledger row arrives or
+   * the user navigates away. The id alone is not sensitive (it lands
+   * in the URL on redirect anyway) and clears on refresh. */
+  const [pendingStripeSession, setPendingStripeSession] = useState<string | null>(null);
   const unlimitedCredits = hasUnlimitedCredits(me?.email, me?.role);
 
   const packagesQuery = useQuery<PackagesResponse>({
@@ -130,11 +143,27 @@ export default function Credits() {
     onSuccess: async (data) => {
       await queryClient.invalidateQueries({ queryKey: ["/api/me"] });
       await queryClient.invalidateQueries({ queryKey: ["/api/credits/transactions"] });
-      setCompletionStatus({
-        kind: "success",
-        credits: data.credits_added,
-        already: data.already_processed,
-      });
+      /* Stripe path: complete-checkout returns `pending: true` when
+       * the webhook has not yet fulfilled the session. Keep the
+       * "pending" status so the poller can flip to success when the
+       * ledger row appears. If the webhook already fired and the
+       * ledger has the purchase row, complete-checkout returns
+       * `already_processed: true`; we surface success either way. */
+      if (data.pending) {
+        setCompletionStatus({ kind: "pending", provider: data.provider ?? "stripe" });
+      } else {
+        setCompletionStatus({
+          kind: "success",
+          credits:
+            data.credits_added > 0
+              ? data.credits_added
+              : data.package?.credits ?? 0,
+          already: data.already_processed,
+        });
+        if (data.already_processed) {
+          setPendingStripeSession(null);
+        }
+      }
       /* Clear callback params from BOTH the search and hash portions so
        * a refresh doesn't re-trigger this effect. Preserve the hash
        * path (`#/credits`) so the user stays on the page. */
@@ -163,12 +192,66 @@ export default function Credits() {
       if (session_id && token && !completeCheckout.isPending) {
         completeCheckout.mutate({ session_id, token });
       }
-    } else if (status === "preview-cancel") {
+    } else if (status === "preview-cancel" || status === "stripe-cancel") {
       setCompletionStatus({ kind: "cancel" });
+    } else if (status === "stripe-success") {
+      /* Stripe redirected the buyer back. The webhook is the
+       * authoritative grant path; we trigger a single complete-checkout
+       * call so the server can tell us whether the webhook has
+       * already fired, and then we start polling /api/me + ledger
+       * until the new balance appears. */
+      const session_id = callbackParams.get("session_id") ?? "";
+      if (session_id) {
+        setPendingStripeSession(session_id);
+        setCompletionStatus({ kind: "pending", provider: "stripe" });
+        if (!completeCheckout.isPending) {
+          completeCheckout.mutate({ session_id, token: "" });
+        }
+      }
     }
     clearPaymentCallbackParams();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callbackParams]);
+
+  /* Stripe pending-state poller. While `pendingStripeSession` is set,
+   * we refetch /api/me and /api/credits/transactions every 2 seconds.
+   * As soon as the ledger contains a row keyed by this Stripe session,
+   * we flip the status to success and stop polling. Bounded at 60s
+   * (30 polls) to avoid an infinite spinner if the webhook never
+   * fires — the user sees a clear "taking longer than expected" message. */
+  useEffect(() => {
+    if (!pendingStripeSession) return;
+    let polls = 0;
+    const maxPolls = 30;
+    const id = window.setInterval(() => {
+      polls += 1;
+      queryClient.invalidateQueries({ queryKey: ["/api/me"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/credits/transactions"] });
+      if (polls >= maxPolls) {
+        window.clearInterval(id);
+        setCompletionStatus({
+          kind: "error",
+          message:
+            "Stripe confirmed payment but the credit grant is taking longer than expected. Your credits will appear in transaction history once Stripe finishes processing.",
+        });
+        setPendingStripeSession(null);
+      }
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [pendingStripeSession]);
+
+  /* When the polling ledger query refreshes, look for the row that
+   * matches the pending Stripe session and resolve the completion. */
+  useEffect(() => {
+    if (!pendingStripeSession) return;
+    const txs = transactionsQuery.data?.transactions ?? [];
+    const ref = `stripe:checkout_session:${pendingStripeSession}`;
+    const match = txs.find((t) => t.reference === ref && t.reason === "purchase");
+    if (match) {
+      setCompletionStatus({ kind: "success", credits: match.amount_delta, already: false });
+      setPendingStripeSession(null);
+    }
+  }, [pendingStripeSession, transactionsQuery.data]);
 
   const checkout = useMutation({
     mutationFn: async (pkg: CreditPackage) => {
@@ -304,6 +387,16 @@ export default function Credits() {
             {completionStatus.already
               ? "We've already credited this session to your account."
               : `${completionStatus.credits} credit${completionStatus.credits === 1 ? "" : "s"} added to your account.`}
+          </AlertDescription>
+        </Alert>
+      )}
+      {completionStatus?.kind === "pending" && (
+        <Alert data-testid="alert-payment-pending" className="border-amber-500/30 bg-amber-500/10">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <AlertTitle>Finishing your purchase…</AlertTitle>
+          <AlertDescription>
+            Stripe confirmed payment. Waiting for the credit grant to land in your
+            account (usually a few seconds). This page will update automatically.
           </AlertDescription>
         </Alert>
       )}

@@ -22,6 +22,7 @@
  * to the credit_transactions table itself.
  * ===================================================================== */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import Stripe from "stripe";
 import { CREDIT_PACKAGES, findCreditPackage, type CreditPackage } from "@shared/entitlements";
 
 /* Common types -------------------------------------------------------- */
@@ -63,6 +64,44 @@ export interface VerifySessionResult {
   error?: string;
 }
 
+/* =====================================================================
+ * Webhook event parsing
+ *
+ * Live providers (Stripe) authenticate webhook deliveries via an HMAC
+ * signature over the raw request body. The provider exposes a
+ * `parseWebhookEvent(rawBody, signature)` hook that returns enough
+ * structured data for the route handler to fulfill credits. The
+ * preview provider has no webhook (purchases are completed inline) so
+ * it intentionally does not implement this method.
+ * ===================================================================== */
+export interface WebhookFulfillment {
+  /** Provider session id (Stripe Checkout Session id, etc.). */
+  session_id: string;
+  /** Resolved package this purchase grants. */
+  package: CreditPackage;
+  /** User id encoded in the metadata when the session was created. */
+  user_id: number;
+  /** Credit amount the webhook reports the buyer paid for. */
+  credits: number;
+  /** Total charged in cents (informational). */
+  amount_cents: number;
+  /** Buyer email reported by the provider, if available. */
+  customer_email?: string;
+}
+
+export interface WebhookParseResult {
+  /** Event id (provider-assigned). Used for ack-only logging. */
+  event_id: string;
+  /** Event type (e.g. checkout.session.completed). */
+  event_type: string;
+  /**
+   * Fulfillment payload when this event grants credits. Null when the
+   * event is something we ack but don't act on (other event types,
+   * session.completed where payment_status != 'paid', etc.).
+   */
+  fulfillment: WebhookFulfillment | null;
+}
+
 export interface PaymentProvider {
   readonly name: string;
   /** True when this provider does not process real payments. */
@@ -75,6 +114,12 @@ export interface PaymentProvider {
   verifySession(input: VerifySessionInput): Promise<VerifySessionResult>;
   /** List the credit packages this provider serves. */
   listPackages(): CreditPackage[];
+  /**
+   * Verify + parse a webhook delivery. Implemented by live providers
+   * only. Throws when the signature does not verify; returns
+   * fulfillment=null for ignored event types.
+   */
+  parseWebhookEvent?(rawBody: Buffer | string, signature: string): WebhookParseResult;
 }
 
 /* =====================================================================
@@ -161,26 +206,262 @@ class PreviewPaymentProvider implements PaymentProvider {
 }
 
 /* =====================================================================
- * Live providers \u2014 not implemented in this preview build.
+ * Stripe Checkout provider
  *
- * Stub classes intentionally throw so a misconfigured environment
- * surfaces clearly rather than silently falling back to preview mode.
- * Drop in the real SDK calls when wiring production. See the handoff
- * for the exact integration points.
+ * Hosted-checkout flow:
+ *   1. createCheckout() calls Stripe to create a one-time Checkout
+ *      Session with `mode='payment'`, an inline `price_data` matching
+ *      the credit package, success_url/cancel_url built from
+ *      APP_BASE_URL, customer_email, and metadata that round-trips the
+ *      user/package/credits/amount through the webhook.
+ *   2. The browser redirects to `session.url`. After paying, Stripe
+ *      redirects the buyer back to `success_url` (or `cancel_url`).
+ *   3. Authoritative fulfillment is via the `checkout.session.completed`
+ *      webhook, NOT the success redirect. The webhook handler verifies
+ *      the signature against STRIPE_WEBHOOK_SECRET, requires
+ *      payment_status='paid', and grants credits via the ledger with
+ *      the idempotency reference `stripe:checkout_session:<id>`.
+ *   4. verifySession() exists for the existing /complete-checkout
+ *      route but is intentionally NOT the grant path. It retrieves the
+ *      session, checks payment_status, and reports the resolved
+ *      package; route handlers must NOT use it to grant credits when
+ *      provider=stripe (the webhook is authoritative).
+ *
+ * Required env vars (validated in server/config.ts):
+ *   - STRIPE_SECRET_KEY      live or test secret (sk_test_... / sk_live_...)
+ *   - STRIPE_WEBHOOK_SECRET  whsec_... from Stripe Dashboard endpoint
+ * Optional:
+ *   - STRIPE_API_VERSION     pin a specific API version (default null \u2192
+ *                            SDK default for the installed Stripe lib)
  * ===================================================================== */
-class UnimplementedStripeProvider implements PaymentProvider {
+class StripePaymentProvider implements PaymentProvider {
   readonly name = "stripe";
   readonly isPreview = false;
   readonly displayName = "Stripe Checkout";
-  listPackages(): CreditPackage[] { return CREDIT_PACKAGES; }
-  async createCheckout(): Promise<CreateCheckoutResult> {
-    throw new Error("Stripe provider not configured in this build");
+  private readonly stripe: Stripe;
+  private readonly webhookSecret: string;
+
+  constructor() {
+    const apiKey = (process.env.STRIPE_SECRET_KEY ?? "").trim();
+    if (!apiKey) {
+      throw new Error(
+        "STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=stripe. Set it in your environment.",
+      );
+    }
+    const apiVersion = (process.env.STRIPE_API_VERSION ?? "").trim();
+    this.stripe = new Stripe(apiKey, apiVersion ? ({ apiVersion } as any) : ({} as any));
+    this.webhookSecret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+    // Don't throw if webhook secret is missing at construction time \u2014
+    // it lets `/api/payments/packages` and createCheckout still work
+    // while the operator is wiring the Dashboard webhook. The webhook
+    // route surfaces a clear 500 if invoked without it.
   }
-  async verifySession(): Promise<VerifySessionResult> {
-    throw new Error("Stripe provider not configured in this build");
+
+  listPackages(): CreditPackage[] {
+    return CREDIT_PACKAGES;
+  }
+
+  async createCheckout(input: CreateCheckoutInput): Promise<CreateCheckoutResult> {
+    const pkg = findCreditPackage(input.package_id);
+    if (!pkg) throw new Error(`Unknown package: ${input.package_id}`);
+
+    /* Inline price_data: the credit catalog (shared/entitlements.ts) is
+     * the source of truth for both the in-app price tile and what the
+     * buyer is actually charged. Using inline price_data avoids the
+     * operator having to mirror the catalog as Stripe Product/Price
+     * records and keeps the ZIP self-contained \u2014 a fresh Stripe
+     * account can wire this build without touching the Dashboard
+     * (other than the webhook endpoint). */
+    const session = await this.stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: pkg.currency.toLowerCase(),
+            unit_amount: pkg.price_cents,
+            product_data: {
+              name: `${pkg.name} \u2014 ${pkg.credits} credit${pkg.credits === 1 ? "" : "s"}`,
+              description: pkg.description,
+              metadata: {
+                package_id: pkg.id,
+                credits: String(pkg.credits),
+              },
+            },
+          },
+        },
+      ],
+      success_url: appendStripeSessionParam(input.success_url),
+      cancel_url: appendStripeStatusParam(input.cancel_url, "cancel"),
+      customer_email: input.user_email || undefined,
+      /* Metadata persists on the Checkout Session and the resulting
+       * PaymentIntent. The webhook handler reads these fields back to
+       * resolve the user + package without having to trust anything
+       * coming from the buyer's browser. */
+      metadata: {
+        user_id: String(input.user_id),
+        package_id: pkg.id,
+        credits: String(pkg.credits),
+        amount_cents: String(pkg.price_cents),
+      },
+      /* Tighten the session lifetime so abandoned sessions don't sit
+       * pending forever. 30 minutes is plenty for a checkout flow but
+       * limits the ambiguity window if a buyer closes the tab and
+       * comes back tomorrow. */
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+    });
+
+    if (!session.url) {
+      throw new Error("Stripe did not return a Checkout URL");
+    }
+    return {
+      checkout_url: session.url,
+      session_id: session.id,
+      package_id: pkg.id,
+      provider: this.name,
+      preview: false,
+    };
+  }
+
+  async verifySession(input: VerifySessionInput): Promise<VerifySessionResult> {
+    /* For Stripe, /complete-checkout exists as a UX nicety so the buyer
+     * sees an "in flight" state when they land back on /#/credits.
+     * The webhook is the authoritative grant path \u2014 verifySession
+     * reports whether the session has paid, but it must NOT be used to
+     * append the ledger row directly when provider=stripe. The route
+     * handler enforces this. */
+    if (!input.session_id) {
+      return { ok: false, provider: this.name, error: "Missing session id" };
+    }
+    try {
+      const session = await this.stripe.checkout.sessions.retrieve(input.session_id);
+      if (session.payment_status !== "paid") {
+        return {
+          ok: false,
+          provider: this.name,
+          error: `Session not paid (payment_status=${session.payment_status ?? "unknown"})`,
+        };
+      }
+      const packageId = String(session.metadata?.package_id ?? "");
+      const pkg = findCreditPackage(packageId);
+      if (!pkg) {
+        return { ok: false, provider: this.name, error: "Session metadata is missing a known package id" };
+      }
+      return { ok: true, provider: this.name, package: pkg };
+    } catch (err: any) {
+      return { ok: false, provider: this.name, error: err?.message ?? "Stripe verifySession failed" };
+    }
+  }
+
+  /* Webhook verification + parsing.
+   *
+   * Uses the Stripe SDK's `webhooks.constructEvent` helper to verify
+   * the `Stripe-Signature` header against STRIPE_WEBHOOK_SECRET over
+   * the raw request body. Per Stripe docs, the body MUST be the exact
+   * bytes received \u2014 any JSON re-serialization breaks the signature.
+   * The route layer ensures we have the raw buffer.
+   *
+   * Only `checkout.session.completed` triggers a fulfillment payload;
+   * other event types return `fulfillment: null` so the route layer
+   * can ack them without writing to the ledger.
+   */
+  parseWebhookEvent(rawBody: Buffer | string, signature: string): WebhookParseResult {
+    if (!this.webhookSecret) {
+      throw new Error(
+        "STRIPE_WEBHOOK_SECRET is required to verify webhook deliveries. Set it in your environment.",
+      );
+    }
+    const event = this.stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
+    const result: WebhookParseResult = {
+      event_id: event.id,
+      event_type: event.type,
+      fulfillment: null,
+    };
+    if (event.type !== "checkout.session.completed") {
+      return result;
+    }
+    const session = event.data.object as Stripe.Checkout.Session;
+    /* Only fulfill paid sessions. Async payment methods (bank
+     * debits, etc.) can fire session.completed with payment_status
+     * != 'paid'; those are picked up by checkout.session.async_payment_succeeded
+     * which we currently don't subscribe to (card-only above). Ignore
+     * defensively. */
+    if (session.payment_status !== "paid") {
+      return result;
+    }
+    const metadata = session.metadata ?? {};
+    const userIdRaw = metadata.user_id;
+    const packageId = metadata.package_id;
+    const creditsRaw = metadata.credits;
+    const amountRaw = metadata.amount_cents ?? String(session.amount_total ?? 0);
+    if (!userIdRaw || !packageId || !creditsRaw) {
+      /* Missing metadata almost always means this session wasn't
+       * created by our backend (e.g. someone reusing the same
+       * STRIPE_SECRET_KEY for another product, or a Dashboard test
+       * session). Ack without fulfilling. */
+      return result;
+    }
+    const user_id = Number(userIdRaw);
+    const credits = Number(creditsRaw);
+    const amount_cents = Number(amountRaw);
+    const pkg = findCreditPackage(packageId);
+    if (!pkg) return result;
+    /* Defense-in-depth: the metadata `credits` value must match what
+     * the catalog says the package grants. Otherwise reject the
+     * fulfillment payload \u2014 someone tampered with the session at
+     * creation time. */
+    if (!Number.isFinite(user_id) || credits !== pkg.credits) {
+      return result;
+    }
+    result.fulfillment = {
+      session_id: session.id,
+      package: pkg,
+      user_id,
+      credits,
+      amount_cents: Number.isFinite(amount_cents) ? amount_cents : pkg.price_cents,
+      customer_email: session.customer_details?.email ?? session.customer_email ?? undefined,
+    };
+    return result;
   }
 }
 
+/* Append a `stripe-session=...` parameter to the configured success URL
+ * so the Credits page can show a "verifying purchase" state when the
+ * buyer lands back. Hash routes like `/#/credits` need the param after
+ * the hash; this helper handles both shapes. */
+function appendStripeSessionParam(url: string): string {
+  return appendStatusToUrl(url, [
+    ["status", "stripe-success"],
+    ["session_id", "{CHECKOUT_SESSION_ID}"],
+  ]);
+}
+function appendStripeStatusParam(url: string, status: string): string {
+  return appendStatusToUrl(url, [["status", `stripe-${status}`]]);
+}
+function appendStatusToUrl(url: string, params: Array<[string, string]>): string {
+  /* If the URL contains a hash (`#/credits`), append params to the
+   * hash search portion so the SPA can read them via location.hash.
+   * Otherwise append to the standard search part. We keep the
+   * Stripe-templated `{CHECKOUT_SESSION_ID}` placeholder intact \u2014
+   * Stripe substitutes it server-side before redirecting. */
+  const hashIndex = url.indexOf("#");
+  if (hashIndex === -1) {
+    const sep = url.includes("?") ? "&" : "?";
+    const query = params.map(([k, v]) => `${encodeURIComponent(k)}=${v}`).join("&");
+    return `${url}${sep}${query}`;
+  }
+  const base = url.slice(0, hashIndex);
+  const hash = url.slice(hashIndex); // includes leading '#'
+  const hasHashQuery = hash.includes("?");
+  const sep = hasHashQuery ? "&" : "?";
+  const query = params.map(([k, v]) => `${encodeURIComponent(k)}=${v}`).join("&");
+  return `${base}${hash}${sep}${query}`;
+}
+
+/* =====================================================================
+ * Live providers \u2014 Lemon Squeezy stub kept in place.
+ * ===================================================================== */
 class UnimplementedLemonSqueezyProvider implements PaymentProvider {
   readonly name = "lemonsqueezy";
   readonly isPreview = false;
@@ -206,7 +487,13 @@ function resolveProvider(): PaymentProvider {
   const requested = (process.env.PAYMENT_PROVIDER ?? "preview").toLowerCase();
   switch (requested) {
     case "stripe":
-      return new UnimplementedStripeProvider();
+      try {
+        return new StripePaymentProvider();
+      } catch (err: any) {
+        console.error("[payments] Stripe provider failed to initialize:", err?.message ?? err);
+        console.error("[payments] Falling back to preview provider. Fix the configuration and restart.");
+        return new PreviewPaymentProvider();
+      }
     case "lemonsqueezy":
     case "lemon-squeezy":
       return new UnimplementedLemonSqueezyProvider();
@@ -217,3 +504,29 @@ function resolveProvider(): PaymentProvider {
 }
 
 export const paymentProvider: PaymentProvider = resolveProvider();
+
+/* Test-only: build a fresh Stripe provider against an explicit secret.
+ * Used by script/verify-stripe-webhook.ts to unit-test the signature
+ * verification path without touching the live `paymentProvider`
+ * singleton or the network. The factory short-circuits Stripe API
+ * calls because the test only invokes parseWebhookEvent(), which is
+ * pure local crypto. */
+export function _createStripeProviderForTest(opts: {
+  secret_key: string;
+  webhook_secret: string;
+}): PaymentProvider {
+  const prev = {
+    secret: process.env.STRIPE_SECRET_KEY,
+    webhook: process.env.STRIPE_WEBHOOK_SECRET,
+  };
+  process.env.STRIPE_SECRET_KEY = opts.secret_key;
+  process.env.STRIPE_WEBHOOK_SECRET = opts.webhook_secret;
+  try {
+    return new StripePaymentProvider();
+  } finally {
+    if (prev.secret === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = prev.secret;
+    if (prev.webhook === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+    else process.env.STRIPE_WEBHOOK_SECRET = prev.webhook;
+  }
+}

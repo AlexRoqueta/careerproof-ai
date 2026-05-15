@@ -814,6 +814,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         success_url,
         cancel_url,
       });
+      /* For Stripe, the webhook is the authoritative grant path. Log
+       * the session id so the operator can correlate Stripe Dashboard
+       * events with app users when debugging. The session id alone is
+       * not sensitive (it's also visible to the buyer in the URL). */
+      if (result.provider === "stripe") {
+        console.log(
+          `[payments] stripe checkout session created session=${result.session_id} user=${me.id} package=${pkg.id}`,
+        );
+      }
       /* For the preview provider, also surface the signed session
        * fields directly in the JSON response so the client can complete
        * the purchase in the same window — no redirect required. This
@@ -842,14 +851,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/payments/complete-checkout", limitCheckoutComplete, async (req: Request, res: Response) => {
     /* The success page on the Credits route POSTs here after the
-     * provider redirects the buyer back. The handler:
-     *   1. Verifies the session with the provider (signature for live,
-     *      HMAC for preview).
-     *   2. Looks up the package and grants credits ONCE via the ledger.
-     *      Duplicate completion calls (e.g. user refreshes the page)
-     *      are idempotent: the ledger row is keyed by `session_id` in
-     *      the reference column, and a row already present short-
-     *      circuits the grant.
+     * provider redirects the buyer back. Behavior depends on which
+     * provider returned the session:
+     *
+     *   - Preview provider: verify the HMAC token, then grant credits
+     *     directly here (the preview flow has no webhook). Idempotency
+     *     keyed by the session id in the ledger reference column.
+     *
+     *   - Stripe (and other live providers): the webhook is the
+     *     AUTHORITATIVE grant path. This endpoint only reports whether
+     *     the session has paid. If the webhook already fired we return
+     *     the new balance; if not we report pending. We NEVER write a
+     *     ledger row here for live providers — doing so would race the
+     *     webhook and risk double-grants. The Credits page polls
+     *     /api/me + /api/credits/transactions so the new balance is
+     *     visible as soon as the webhook completes.
      */
     const meId = getCurrentUserId();
     const me = meId != null ? await storage.getUser(meId) : undefined;
@@ -862,13 +878,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const verify = await paymentProvider.verifySession({ session_id, token });
       if (!verify.ok || !verify.package) {
+        // For Stripe, a not-yet-paid session is the common case when the
+        // buyer lands back faster than the webhook fires — surface that
+        // as a pending state, not an error, so the client can poll.
+        if (paymentProvider.name === "stripe") {
+          const current = await storage.getUser(me.id);
+          return res.json({
+            user: sanitizeUserForResponse(current ?? me),
+            credits_added: 0,
+            already_processed: false,
+            pending: true,
+            provider: paymentProvider.name,
+          });
+        }
         return res.status(400).json({ error: verify.error ?? "Could not verify the purchase" });
       }
-      const reference = `${verify.provider}:${session_id}`;
+      const reference = `${verify.provider}:checkout_session:${session_id}`;
+      const legacyReference = `${verify.provider}:${session_id}`;
       // Idempotency — if this session already produced a ledger row,
       // return the current user without granting again.
       const txs = await storage.listCreditTransactions(me.id);
-      const existing = txs.find((t) => t.reference === reference && t.reason === "purchase");
+      const existing = txs.find(
+        (t) =>
+          (t.reference === reference || t.reference === legacyReference) &&
+          t.reason === "purchase",
+      );
       if (existing) {
         const current = await storage.getUser(me.id);
         return res.json({
@@ -878,13 +912,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           package: verify.package,
         });
       }
+      // Live providers: webhook is authoritative. Do NOT grant here —
+      // tell the client the purchase is pending and to poll.
+      if (verify.provider !== "preview") {
+        const current = await storage.getUser(me.id);
+        return res.json({
+          user: sanitizeUserForResponse(current ?? me),
+          credits_added: 0,
+          already_processed: false,
+          pending: true,
+          provider: verify.provider,
+          package: verify.package,
+        });
+      }
+      // Preview-only inline grant.
       const updated = await storage.setUserCredits(me.id, me.credits + verify.package.credits);
       await storage.appendCreditTransaction({
         user_id: me.id,
         amount_delta: verify.package.credits,
         balance_after: updated?.credits ?? me.credits + verify.package.credits,
         reason: "purchase",
-        reference,
+        reference: legacyReference,
         provider: verify.provider,
         created_at: new Date().toISOString(),
       });
@@ -900,15 +948,108 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/payments/webhook", (_req: Request, res: Response) => {
-    // === BOUNDARY: real webhook ===
-    // Production (Stripe / Lemon Squeezy / Paddle): verify signature
-    // header, parse the event, and on `checkout.session.completed` (or
-    // equivalent) append a ledger row + setUserCredits exactly as
-    // /api/payments/complete-checkout does above. Webhook is the
-    // authoritative grant in production (the redirect handler becomes
-    // a UX nicety that retries if the webhook is delayed).
-    res.json({ received: true, preview: true });
+  /* Stripe (and any future live provider) webhook.
+   *
+   * The signature is computed over the EXACT raw bytes Stripe sent;
+   * `req.rawBody` captures that buffer via the express.json verify
+   * callback installed in server/index.ts. For belt-and-suspenders
+   * safety we also accept a re-stringified body when rawBody is
+   * missing (e.g. some middleware re-stacks); that path will fail
+   * signature verification cleanly rather than silently passing.
+   *
+   * Behavior:
+   *   - Verify Stripe-Signature; reject with 400 on mismatch.
+   *   - Handle only `checkout.session.completed` with payment_status='paid'.
+   *   - Fulfill credits exactly once using ledger idempotency on the
+   *     reference `stripe:checkout_session:<id>`.
+   *   - Ack other events with 200 so Stripe stops retrying.
+   */
+  app.post("/api/payments/webhook", async (req: Request, res: Response) => {
+    if (!paymentProvider.parseWebhookEvent) {
+      // Preview / unsupported provider — acknowledge so Stripe (if
+      // wired to a preview deployment by mistake) stops retrying, but
+      // don't pretend to have processed anything.
+      return res.json({ received: true, preview: true });
+    }
+    const signature = String(req.header("stripe-signature") ?? "");
+    if (!signature) {
+      return res.status(400).json({ error: "Missing Stripe-Signature header" });
+    }
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    if (!rawBody || !Buffer.isBuffer(rawBody)) {
+      console.error("[payments.webhook] raw body missing \u2014 cannot verify signature");
+      return res.status(400).json({ error: "Raw request body unavailable" });
+    }
+    let parsed;
+    try {
+      parsed = paymentProvider.parseWebhookEvent(rawBody, signature);
+    } catch (err: any) {
+      console.warn("[payments.webhook] signature verification failed:", err?.message ?? err);
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+    if (!parsed.fulfillment) {
+      // Ack-only path: irrelevant event type, or session not paid.
+      console.log(
+        `[payments.webhook] ack event=${parsed.event_id} type=${parsed.event_type} (no fulfillment)`,
+      );
+      return res.json({ received: true, event_id: parsed.event_id, fulfilled: false });
+    }
+    const f = parsed.fulfillment;
+    const reference = `stripe:checkout_session:${f.session_id}`;
+    try {
+      const user = await storage.getUser(f.user_id);
+      if (!user) {
+        console.error(
+          `[payments.webhook] unknown user_id=${f.user_id} on event=${parsed.event_id}; acking without fulfillment`,
+        );
+        return res.json({ received: true, event_id: parsed.event_id, fulfilled: false });
+      }
+      const txs = await storage.listCreditTransactions(user.id);
+      const existing = txs.find((t) => t.reference === reference && t.reason === "purchase");
+      if (existing) {
+        console.log(
+          `[payments.webhook] duplicate event=${parsed.event_id} session=${f.session_id} already fulfilled; ack`,
+        );
+        return res.json({ received: true, event_id: parsed.event_id, fulfilled: false, duplicate: true });
+      }
+      const updated = await storage.setUserCredits(user.id, user.credits + f.credits);
+      try {
+        await storage.appendCreditTransaction({
+          user_id: user.id,
+          amount_delta: f.credits,
+          balance_after: updated?.credits ?? user.credits + f.credits,
+          reason: "purchase",
+          reference,
+          provider: "stripe",
+          created_at: new Date().toISOString(),
+        });
+      } catch (err: any) {
+        // If a partial unique constraint on (user_id, reference, reason)
+        // ever races us (parallel webhook deliveries), roll back the
+        // credit grant and ack the duplicate.
+        if (err?.code === "23505" || /UNIQUE/i.test(String(err?.message ?? ""))) {
+          await storage.setUserCredits(user.id, user.credits);
+          console.log(
+            `[payments.webhook] duplicate insert raced event=${parsed.event_id}; balance unchanged`,
+          );
+          return res.json({ received: true, event_id: parsed.event_id, fulfilled: false, duplicate: true });
+        }
+        throw err;
+      }
+      console.log(
+        `[payments.webhook] fulfilled event=${parsed.event_id} session=${f.session_id} user=${user.id} credits=${f.credits} amount_cents=${f.amount_cents}`,
+      );
+      res.json({
+        received: true,
+        event_id: parsed.event_id,
+        fulfilled: true,
+        credits: f.credits,
+      });
+    } catch (err: any) {
+      console.error("[payments.webhook] fulfillment failed:", err);
+      // Return 500 so Stripe retries the delivery.
+      res.status(500).json({ error: "Fulfillment failed" });
+    }
   });
 
   /* --------------- Credits: ledger + promo + admin grant --------------- */

@@ -103,7 +103,14 @@ function useNormalizePaymentCallback() {
     }
     if (!captured) return;
     const status = captured.get("status");
-    if (status !== "preview-success" && status !== "preview-cancel") return;
+    if (
+      status !== "preview-success" &&
+      status !== "preview-cancel" &&
+      status !== "stripe-success" &&
+      status !== "stripe-cancel"
+    ) {
+      return;
+    }
 
     // Stash for the Credits page to pick up.
     (globalThis as any)[PAYMENT_CALLBACK_KEY] = captured;
