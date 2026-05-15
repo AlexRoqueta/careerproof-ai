@@ -1,0 +1,366 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+ * Palette: "Aurora" — cool slate neutrals + a luminous cyan-violet accent.
+ * Sleek, slightly futuristic, professional. Not anxiety-driven.
+ * ===================================================================== */
+
+/* LIGHT MODE */
+:root {
+  --button-outline: rgba(15, 23, 42, 0.08);
+  --badge-outline: rgba(15, 23, 42, 0.05);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(15, 23, 42, 0.04);
+  --elevate-2: rgba(15, 23, 42, 0.08);
+
+  --background: 220 30% 98%;
+  --foreground: 222 47% 11%;
+  --border: 220 13% 88%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 220 13% 90%;
+  --sidebar: 222 47% 11%;
+  --sidebar-foreground: 220 30% 96%;
+  --sidebar-border: 222 33% 18%;
+  --sidebar-primary: 188 96% 53%;
+  --sidebar-primary-foreground: 222 47% 11%;
+  --sidebar-accent: 222 33% 18%;
+  --sidebar-accent-foreground: 220 30% 96%;
+  --sidebar-ring: 188 96% 53%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 220 13% 88%;
+  --primary: 199 89% 48%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 14% 94%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 220 14% 94%;
+  --muted-foreground: 220 9% 46%;
+  --accent: 220 14% 94%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 220 13% 84%;
+  --ring: 199 89% 48%;
+  --chart-1: 199 89% 48%;
+  --chart-2: 263 70% 60%;
+  --chart-3: 188 86% 53%;
+  --chart-4: 43 89% 55%;
+  --chart-5: 340 75% 55%;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 0.625rem;
+  --shadow-2xs: 0px 1px 2px 0px hsl(222 47% 11% / 0.04);
+  --shadow-xs: 0px 1px 2px 0px hsl(222 47% 11% / 0.06);
+  --shadow-sm: 0px 1px 2px 0px hsl(222 47% 11% / 0.06), 0px 1px 3px -1px hsl(222 47% 11% / 0.06);
+  --shadow: 0px 2px 4px -1px hsl(222 47% 11% / 0.08), 0px 1px 2px -1px hsl(222 47% 11% / 0.06);
+  --shadow-md: 0px 4px 6px -2px hsl(222 47% 11% / 0.08);
+  --shadow-lg: 0px 10px 15px -3px hsl(222 47% 11% / 0.1);
+  --shadow-xl: 0px 20px 25px -5px hsl(222 47% 11% / 0.12);
+  --shadow-2xl: 0px 25px 50px -12px hsl(222 47% 11% / 0.25);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-accent-border: hsl(var(--sidebar-accent));
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --secondary-border: hsl(var(--secondary));
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --muted-border: hsl(var(--muted));
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --accent-border: hsl(var(--accent));
+  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --destructive-border: hsl(var(--destructive));
+  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+.dark {
+  --button-outline: rgba(255, 255, 255, 0.08);
+  --badge-outline: rgba(255, 255, 255, 0.05);
+  --opaque-button-border-intensity: 9;
+  --elevate-1: rgba(255, 255, 255, 0.04);
+  --elevate-2: rgba(255, 255, 255, 0.09);
+
+  --background: 222 47% 7%;
+  --foreground: 220 30% 96%;
+  --border: 222 33% 18%;
+  --card: 222 40% 10%;
+  --card-foreground: 220 30% 96%;
+  --card-border: 222 33% 18%;
+  --sidebar: 222 47% 5%;
+  --sidebar-foreground: 220 30% 96%;
+  --sidebar-border: 222 33% 13%;
+  --sidebar-primary: 188 96% 53%;
+  --sidebar-primary-foreground: 222 47% 11%;
+  --sidebar-accent: 222 33% 14%;
+  --sidebar-accent-foreground: 220 30% 96%;
+  --sidebar-ring: 188 96% 53%;
+  --popover: 222 40% 10%;
+  --popover-foreground: 220 30% 96%;
+  --popover-border: 222 33% 18%;
+  --primary: 188 96% 53%;
+  --primary-foreground: 222 47% 11%;
+  --secondary: 222 33% 16%;
+  --secondary-foreground: 220 30% 96%;
+  --muted: 222 33% 16%;
+  --muted-foreground: 220 9% 65%;
+  --accent: 222 33% 18%;
+  --accent-foreground: 220 30% 96%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 222 33% 22%;
+  --ring: 188 96% 53%;
+  --chart-1: 188 96% 53%;
+  --chart-2: 263 70% 70%;
+  --chart-3: 199 89% 58%;
+  --chart-4: 43 89% 65%;
+  --chart-5: 340 75% 65%;
+
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-accent-border: hsl(var(--sidebar-accent));
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --secondary-border: hsl(var(--secondary));
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --muted-border: hsl(var(--muted));
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --accent-border: hsl(var(--accent));
+  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --destructive-border: hsl(var(--destructive));
+  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  /* Ensure html and body always paint the themed surface color. Without
+     setting html, iOS Safari may render the area outside body (rubber-band
+     overscroll, safe-area insets) with its default white, which looks like
+     a broken dark-mode page. */
+  html {
+    @apply bg-background text-foreground;
+  }
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    font-feature-settings: "ss01", "cv11";
+  }
+  /* Final CSS-only safety net: if the inline bootstrap <script> in index.html
+     is blocked (strict CSP, very old browsers, JS disabled), the app must
+     STILL render dark because it is intentionally dark-only. We do NOT rely
+     on prefers-color-scheme — iPhones in light mode must still get dark. */
+  html:not(.dark) {
+    color-scheme: dark;
+    background-color: hsl(222 47% 7%);
+    color: hsl(220 30% 96%);
+  }
+  html:not(.dark) body {
+    background-color: hsl(222 47% 7%);
+    color: hsl(220 30% 96%);
+  }
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.01em;
+  }
+}
+
+/* --- App-specific utilities --- */
+@layer utilities {
+  /* Subtle aurora gradient for hero card headers */
+  .bg-aurora {
+    background:
+      radial-gradient(120% 80% at 0% 0%, hsl(199 89% 48% / 0.18), transparent 60%),
+      radial-gradient(120% 80% at 100% 100%, hsl(263 70% 60% / 0.18), transparent 60%),
+      linear-gradient(180deg, hsl(222 47% 11%), hsl(222 47% 7%));
+  }
+  .bg-aurora-light {
+    background:
+      radial-gradient(120% 80% at 0% 0%, hsl(199 89% 70% / 0.15), transparent 60%),
+      radial-gradient(120% 80% at 100% 100%, hsl(263 70% 75% / 0.15), transparent 60%),
+      linear-gradient(180deg, hsl(220 30% 99%), hsl(220 30% 96%));
+  }
+  .text-gradient {
+    background: linear-gradient(90deg, hsl(199 89% 48%), hsl(263 70% 60%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.5) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.5) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  input[type='search']::-webkit-search-cancel-button {
+    @apply hidden;
+  }
+  [contenteditable][data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    pointer-events: none;
+  }
+  .no-default-hover-elevate {}
+  .no-default-active-elevate {}
+
+  .toggle-elevate::before,
+  .toggle-elevate-2::before {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    border-radius: inherit;
+    z-index: -1;
+  }
+  .toggle-elevate.toggle-elevated::before { background-color: var(--elevate-2); }
+  .border.toggle-elevate::before { inset: -1px; }
+
+  .hover-elevate:not(.no-default-hover-elevate),
+  .active-elevate:not(.no-default-active-elevate),
+  .hover-elevate-2:not(.no-default-hover-elevate),
+  .active-elevate-2:not(.no-default-active-elevate) {
+    position: relative;
+    z-index: 0;
+  }
+  .hover-elevate:not(.no-default-hover-elevate)::after,
+  .active-elevate:not(.no-default-active-elevate)::after,
+  .hover-elevate-2:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:not(.no-default-active-elevate)::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    border-radius: inherit;
+    z-index: 999;
+  }
+  .hover-elevate:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate:active:not(.no-default-active-elevate)::after { background-color: var(--elevate-1); }
+  .hover-elevate-2:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:active:not(.no-default-active-elevate)::after { background-color: var(--elevate-2); }
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate-2:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate-2:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after { inset: -1px; }
+}
+
+/* --- Print: report page --- */
+@media print {
+  .no-print, .no-print * { display: none !important; }
+  :root,
+  .dark {
+    --background: 0 0% 100% !important;
+    --foreground: 0 0% 0% !important;
+    --card: 0 0% 100% !important;
+    --card-foreground: 0 0% 0% !important;
+    --muted-foreground: 0 0% 25% !important;
+    --border: 0 0% 72% !important;
+    --primary: 0 0% 0% !important;
+    --primary-foreground: 0 0% 100% !important;
+  }
+  html,
+  body {
+    background: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  article,
+  section,
+  footer,
+  .prose-app,
+  .prose-app * {
+    color: black !important;
+    background: transparent !important;
+  }
+  .text-gradient {
+    background: none !important;
+    -webkit-background-clip: initial !important;
+    background-clip: initial !important;
+    color: black !important;
+  }
+  .print-card { box-shadow: none !important; border: none !important; }
+  .prose-app {
+    font-size: 11pt !important;
+    line-height: 1.55 !important;
+  }
+  .prose-app p,
+  .prose-app li {
+    font-size: 11pt !important;
+    line-height: 1.55 !important;
+    color: black !important;
+  }
+  .prose-app h1 {
+    font-size: 18pt !important;
+    line-height: 1.2 !important;
+    color: black !important;
+  }
+  .prose-app h2 {
+    font-size: 14pt !important;
+    line-height: 1.25 !important;
+    color: black !important;
+    break-after: avoid;
+  }
+  .prose-app h3,
+  .prose-app strong {
+    color: black !important;
+  }
+  .prose-app hr {
+    border-color: #9ca3af !important;
+  }
+}
+
+/* Markdown prose tweaks */
+.prose-app h1 { @apply text-xl font-semibold mt-0 mb-3; }
+.prose-app h2 { @apply text-lg font-semibold mt-6 mb-2; }
+.prose-app h3 { @apply text-base font-semibold mt-5 mb-2; }
+.prose-app p  { @apply text-sm leading-relaxed text-foreground/90 my-2; }
+.prose-app ul { @apply list-disc pl-5 my-2 text-sm; }
+.prose-app ol { @apply list-decimal pl-5 my-2 text-sm; }
+.prose-app li { @apply my-1; }
+.prose-app strong { @apply font-semibold text-foreground; }
+.prose-app hr { @apply my-4 border-border; }
+.prose-app code { @apply px-1 py-0.5 rounded bg-muted text-xs; }
+
+/* Locked report state — zero-credit preview. Headings, hr, and the
+ * outer container stay readable so the report shell is still useful;
+ * body prose (paragraphs, list items, inline emphasis) is blurred and
+ * has its selection disabled so the content cannot be trivially copied. */
+.prose-app-locked p,
+.prose-app-locked li,
+.prose-app-locked strong,
+.prose-app-locked em,
+.prose-app-locked code {
+  filter: blur(6px);
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+  transition: filter 200ms ease;
+}
+.prose-app-locked p::selection,
+.prose-app-locked li::selection {
+  background: transparent;
+}
+.prose-app-locked h1,
+.prose-app-locked h2,
+.prose-app-locked h3 {
+  /* Section titles remain crisp so the user can still see report
+   * structure and what they’ll unlock. */
+  filter: none;
+}
+@media print {
+  .prose-app-locked p,
+  .prose-app-locked li,
+  .prose-app-locked strong,
+  .prose-app-locked em,
+  .prose-app-locked code {
+    filter: blur(6px);
+  }
+}
