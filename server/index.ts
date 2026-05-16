@@ -87,6 +87,18 @@ app.use((req, res, next) => {
   await initStorage();
   await registerRoutes(httpServer, app);
 
+  /* Any /api/* request that reached here did not match a registered
+   * route. Without this guard the SPA catch-all (serveStatic / Vite)
+   * would respond with 200 + index.html, which makes the app look like
+   * an open server to internet scanners probing for /api/.env,
+   * /api/swagger.json, /api/graphql, etc. Return a tight JSON 404
+   * instead so unknown API surface is unambiguously closed and is not
+   * indexed as a valid endpoint. Frontend hash routing (`/#/...`) is
+   * unaffected — those requests hit `/` and fall through to the SPA. */
+  app.use("/api", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "Not found" });
+  });
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
