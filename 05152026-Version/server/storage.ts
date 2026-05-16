@@ -1,0 +1,887 @@
+/* =====================================================================
+ * Storage layer
+ *
+ * Provides an async storage interface (`IStorage`) backed by either
+ * SQLite (default — used in dev/preview without DATABASE_URL) or
+ * Postgres (selected when DATABASE_URL starts with postgres:// or
+ * postgresql://). All methods return Promises so the route handlers
+ * can use a single uniform `await` pattern regardless of backend.
+ *
+ * The SQLite implementation uses better-sqlite3 (synchronous, wrapped
+ * in Promise.resolve()). The Postgres implementation uses node-postgres
+ * (`pg`) directly with parameterized SQL — no Drizzle on the Postgres
+ * side, because Drizzle's better-sqlite3 driver is sync and its
+ * node-postgres driver is async, and we want a single implementation
+ * shape with explicit, auditable SQL.
+ *
+ * `initStorage()` MUST be awaited at startup (server/index.ts) before
+ * any route handler runs. It picks the backend, runs CREATE TABLE IF
+ * NOT EXISTS migrations, and bootstraps the seeded preview accounts.
+ * ===================================================================== */
+import {
+  type User,
+  type InsertUser,
+  type Resume,
+  type InsertResume,
+  type Analysis,
+  type InsertAnalysis,
+  type PasswordReset,
+  type CreditTransaction,
+  type InsertCreditTransaction,
+} from "@shared/schema";
+import Database from "better-sqlite3";
+import { Pool, type PoolClient } from "pg";
+import { hashPassword } from "./password";
+
+/* ---------------------------------------------------------------------
+ * Storage interface — all methods are async so the same surface works
+ * for both sync SQLite and async Postgres backends.
+ * ------------------------------------------------------------------- */
+export interface IStorage {
+  // Users
+  getUser(id: number): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  listUsers(): Promise<User[]>;
+  setUserCredits(id: number, credits: number): Promise<User | undefined>;
+  decrementCredits(id: number): Promise<User | undefined>;
+  setUserPassword(id: number, password_hash: string): Promise<User | undefined>;
+  // Password reset codes
+  createPasswordReset(input: {
+    user_id: number;
+    code_hash: string;
+    created_at: string;
+    expires_at: string;
+  }): Promise<PasswordReset>;
+  listActivePasswordResetsForUser(user_id: number): Promise<PasswordReset[]>;
+  markPasswordResetUsed(id: number, used_at: string): Promise<void>;
+  invalidateOtherPasswordResets(
+    user_id: number,
+    except_id: number,
+    used_at: string,
+  ): Promise<void>;
+  // Credit ledger
+  appendCreditTransaction(tx: InsertCreditTransaction): Promise<CreditTransaction>;
+  listCreditTransactions(user_id: number): Promise<CreditTransaction[]>;
+  hasUserRedeemedPromo(user_id: number, promo_code_reference: string): Promise<boolean>;
+  // Resumes
+  listResumes(userId: number): Promise<Resume[]>;
+  getResume(id: number): Promise<Resume | undefined>;
+  createResume(resume: InsertResume): Promise<Resume>;
+  deleteResume(id: number): Promise<{ changes: number }>;
+  // Analyses
+  listAnalyses(userId: number): Promise<Analysis[]>;
+  getAnalysis(id: number): Promise<Analysis | undefined>;
+  createAnalysis(analysis: InsertAnalysis): Promise<Analysis>;
+  deleteAnalysis(id: number): Promise<{ changes: number }>;
+  unlockAnalysis(id: number): Promise<Analysis | undefined>;
+}
+
+/* =====================================================================
+ * SQLite implementation (better-sqlite3, synchronous under the hood,
+ * awaited via Promise.resolve()). Used for local/preview when
+ * DATABASE_URL is absent or does not point at a Postgres database.
+ * ===================================================================== */
+class SqliteStorage implements IStorage {
+  private sqlite: Database.Database;
+
+  constructor(path = "data.db") {
+    this.sqlite = new Database(path);
+    this.sqlite.pragma("journal_mode = WAL");
+    this.migrate();
+  }
+
+  private migrate() {
+    this.sqlite.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL DEFAULT 'user',
+  credits INTEGER NOT NULL DEFAULT 0,
+  created_date TEXT NOT NULL,
+  password_hash TEXT
+);
+CREATE TABLE IF NOT EXISTS resumes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_date TEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  file_url TEXT NOT NULL,
+  extracted_text TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS analyses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_date TEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  job_title TEXT NOT NULL,
+  job_description TEXT NOT NULL,
+  technology_context TEXT,
+  resume_id INTEGER,
+  result_text TEXT NOT NULL,
+  provider_used TEXT NOT NULL,
+  automation_risk TEXT NOT NULL,
+  risk_score INTEGER NOT NULL,
+  is_locked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  code_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+CREATE TABLE IF NOT EXISTS credit_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  amount_delta INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  reference TEXT,
+  provider TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_reason ON credit_transactions(user_id, reason);
+`);
+    // Additive migrations for legacy databases.
+    try {
+      const cols = this.sqlite
+        .prepare("PRAGMA table_info(analyses)")
+        .all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "is_locked")) {
+        this.sqlite.exec(
+          "ALTER TABLE analyses ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    } catch {
+      // safe to ignore — table was just created
+    }
+    try {
+      const cols = this.sqlite
+        .prepare("PRAGMA table_info(users)")
+        .all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "password_hash")) {
+        this.sqlite.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
+      }
+    } catch {
+      // safe to ignore
+    }
+  }
+
+  // Normalize the boolean-ish SQLite integer columns to true JS booleans
+  // so the type contract matches what shared/schema.ts promises.
+  private hydrateAnalysis(row: any): Analysis {
+    if (!row) return row;
+    return { ...row, is_locked: !!row.is_locked } as Analysis;
+  }
+
+  async getUser(id: number): Promise<User | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM users WHERE id = ?")
+      .get(id) as User | undefined;
+  }
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email) as User | undefined;
+  }
+  async createUser(u: InsertUser): Promise<User> {
+    const row = this.sqlite
+      .prepare(
+        `INSERT INTO users (full_name, email, role, credits, created_date, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        u.full_name,
+        u.email,
+        u.role ?? "user",
+        u.credits ?? 0,
+        u.created_date,
+        u.password_hash ?? null,
+      ) as User;
+    return row;
+  }
+  async listUsers(): Promise<User[]> {
+    return this.sqlite.prepare("SELECT * FROM users ORDER BY id").all() as User[];
+  }
+  async setUserCredits(id: number, credits: number): Promise<User | undefined> {
+    return this.sqlite
+      .prepare("UPDATE users SET credits = ? WHERE id = ? RETURNING *")
+      .get(credits, id) as User | undefined;
+  }
+  async decrementCredits(id: number): Promise<User | undefined> {
+    return this.sqlite
+      .prepare("UPDATE users SET credits = credits - 1 WHERE id = ? RETURNING *")
+      .get(id) as User | undefined;
+  }
+  async setUserPassword(id: number, password_hash: string): Promise<User | undefined> {
+    return this.sqlite
+      .prepare("UPDATE users SET password_hash = ? WHERE id = ? RETURNING *")
+      .get(password_hash, id) as User | undefined;
+  }
+
+  async createPasswordReset(input: {
+    user_id: number;
+    code_hash: string;
+    created_at: string;
+    expires_at: string;
+  }): Promise<PasswordReset> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO password_resets (user_id, code_hash, created_at, expires_at, used_at)
+         VALUES (?, ?, ?, ?, NULL) RETURNING *`,
+      )
+      .get(
+        input.user_id,
+        input.code_hash,
+        input.created_at,
+        input.expires_at,
+      ) as PasswordReset;
+  }
+  async listActivePasswordResetsForUser(user_id: number): Promise<PasswordReset[]> {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM password_resets
+          WHERE user_id = ? AND used_at IS NULL
+          ORDER BY id DESC`,
+      )
+      .all(user_id) as PasswordReset[];
+  }
+  async markPasswordResetUsed(id: number, used_at: string): Promise<void> {
+    this.sqlite
+      .prepare("UPDATE password_resets SET used_at = ? WHERE id = ?")
+      .run(used_at, id);
+  }
+  async invalidateOtherPasswordResets(
+    user_id: number,
+    except_id: number,
+    used_at: string,
+  ): Promise<void> {
+    this.sqlite
+      .prepare(
+        `UPDATE password_resets SET used_at = ?
+          WHERE user_id = ? AND used_at IS NULL AND id != ?`,
+      )
+      .run(used_at, user_id, except_id);
+  }
+
+  async appendCreditTransaction(tx: InsertCreditTransaction): Promise<CreditTransaction> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO credit_transactions
+           (user_id, amount_delta, balance_after, reason, reference, provider, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        tx.user_id,
+        tx.amount_delta,
+        tx.balance_after,
+        tx.reason,
+        tx.reference ?? null,
+        tx.provider ?? null,
+        tx.created_at,
+      ) as CreditTransaction;
+  }
+  async listCreditTransactions(user_id: number): Promise<CreditTransaction[]> {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM credit_transactions WHERE user_id = ? ORDER BY id DESC`,
+      )
+      .all(user_id) as CreditTransaction[];
+  }
+  async hasUserRedeemedPromo(user_id: number, promo: string): Promise<boolean> {
+    const hit = this.sqlite
+      .prepare(
+        `SELECT 1 FROM credit_transactions
+          WHERE user_id = ? AND reason = 'promo' AND reference = ?
+          LIMIT 1`,
+      )
+      .get(user_id, promo);
+    return !!hit;
+  }
+
+  async listResumes(userId: number): Promise<Resume[]> {
+    return this.sqlite
+      .prepare("SELECT * FROM resumes WHERE created_by = ? ORDER BY id DESC")
+      .all(userId) as Resume[];
+  }
+  async getResume(id: number): Promise<Resume | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM resumes WHERE id = ?")
+      .get(id) as Resume | undefined;
+  }
+  async createResume(r: InsertResume): Promise<Resume> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO resumes
+           (created_date, created_by, filename, content_type, file_url, extracted_text, size_bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        r.created_date,
+        r.created_by,
+        r.filename,
+        r.content_type,
+        r.file_url,
+        r.extracted_text,
+        r.size_bytes,
+      ) as Resume;
+  }
+  async deleteResume(id: number): Promise<{ changes: number }> {
+    const r = this.sqlite.prepare("DELETE FROM resumes WHERE id = ?").run(id);
+    return { changes: r.changes };
+  }
+
+  async listAnalyses(userId: number): Promise<Analysis[]> {
+    const rows = this.sqlite
+      .prepare("SELECT * FROM analyses WHERE created_by = ? ORDER BY id DESC")
+      .all(userId) as any[];
+    return rows.map((r) => this.hydrateAnalysis(r));
+  }
+  async getAnalysis(id: number): Promise<Analysis | undefined> {
+    const row = this.sqlite
+      .prepare("SELECT * FROM analyses WHERE id = ?")
+      .get(id);
+    return row ? this.hydrateAnalysis(row) : undefined;
+  }
+  async createAnalysis(a: InsertAnalysis): Promise<Analysis> {
+    const row = this.sqlite
+      .prepare(
+        `INSERT INTO analyses
+           (created_date, created_by, job_title, job_description, technology_context,
+            resume_id, result_text, provider_used, automation_risk, risk_score, is_locked)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        a.created_date,
+        a.created_by,
+        a.job_title,
+        a.job_description,
+        a.technology_context ?? null,
+        a.resume_id ?? null,
+        a.result_text,
+        a.provider_used,
+        a.automation_risk,
+        a.risk_score,
+        a.is_locked ? 1 : 0,
+      );
+    return this.hydrateAnalysis(row);
+  }
+  async deleteAnalysis(id: number): Promise<{ changes: number }> {
+    const r = this.sqlite.prepare("DELETE FROM analyses WHERE id = ?").run(id);
+    return { changes: r.changes };
+  }
+  async unlockAnalysis(id: number): Promise<Analysis | undefined> {
+    const row = this.sqlite
+      .prepare("UPDATE analyses SET is_locked = 0 WHERE id = ? RETURNING *")
+      .get(id);
+    return row ? this.hydrateAnalysis(row) : undefined;
+  }
+}
+
+/* =====================================================================
+ * Postgres implementation (node-postgres `pg`). Selected when
+ * DATABASE_URL starts with postgres:// or postgresql://.
+ *
+ * Schema notes:
+ *   - SERIAL primary keys mirror SQLite's AUTOINCREMENT.
+ *   - is_locked is a real BOOLEAN.
+ *   - All date/time columns stay as TEXT so the wire format and the
+ *     application code (ISO strings) match the SQLite layout byte for
+ *     byte. The application is the single owner of timestamp parsing,
+ *     so we don't lean on Postgres TIMESTAMP semantics.
+ *   - Email uniqueness is enforced.
+ *   - Idempotency for promo redemption is enforced at the application
+ *     layer (hasUserRedeemedPromo) AND at the database layer via a
+ *     partial unique index on (user_id, reference) where reason='promo'.
+ * ===================================================================== */
+class PostgresStorage implements IStorage {
+  private pool: Pool;
+  private migrated = false;
+
+  constructor(connectionString: string) {
+    // Render Postgres requires SSL. The "external" connection strings
+    // they hand out include sslmode=require already, but we add a
+    // permissive fallback for managed Postgres providers that supply
+    // self-signed certs (Render, Heroku, Supabase pooler, etc.).
+    const useSsl =
+      process.env.DATABASE_SSL === "1" ||
+      /sslmode=require/i.test(connectionString) ||
+      /\.render\.com/i.test(connectionString) ||
+      /\.amazonaws\.com/i.test(connectionString) ||
+      /supabase\./i.test(connectionString);
+    this.pool = new Pool({
+      connectionString,
+      ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+      max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+    });
+  }
+
+  async migrate(): Promise<void> {
+    if (this.migrated) return;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          full_name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          role TEXT NOT NULL DEFAULT 'user',
+          credits INTEGER NOT NULL DEFAULT 0,
+          created_date TEXT NOT NULL,
+          password_hash TEXT
+        );
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS resumes (
+          id SERIAL PRIMARY KEY,
+          created_date TEXT NOT NULL,
+          created_by INTEGER NOT NULL,
+          filename TEXT NOT NULL,
+          content_type TEXT NOT NULL,
+          file_url TEXT NOT NULL,
+          extracted_text TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL
+        );
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS analyses (
+          id SERIAL PRIMARY KEY,
+          created_date TEXT NOT NULL,
+          created_by INTEGER NOT NULL,
+          job_title TEXT NOT NULL,
+          job_description TEXT NOT NULL,
+          technology_context TEXT,
+          resume_id INTEGER,
+          result_text TEXT NOT NULL,
+          provider_used TEXT NOT NULL,
+          automation_risk TEXT NOT NULL,
+          risk_score INTEGER NOT NULL,
+          is_locked BOOLEAN NOT NULL DEFAULT FALSE
+        );
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS password_resets (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          code_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT
+        );
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);`,
+      );
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS credit_transactions (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          amount_delta INTEGER NOT NULL,
+          balance_after INTEGER NOT NULL,
+          reason TEXT NOT NULL,
+          reference TEXT,
+          provider TEXT,
+          created_at TEXT NOT NULL
+        );
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_credit_transactions_user
+           ON credit_transactions(user_id);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_reason
+           ON credit_transactions(user_id, reason);`,
+      );
+      // Idempotency guard: a given (user_id, reference) pair under
+      // reason='promo' may only appear once. This is the database-level
+      // partner to hasUserRedeemedPromo() — even a race condition that
+      // sneaks past the application check cannot double-credit.
+      await client.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_transactions_promo_once
+           ON credit_transactions(user_id, reference)
+         WHERE reason = 'promo' AND reference IS NOT NULL;`,
+      );
+      await client.query("COMMIT");
+      this.migrated = true;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Postgres returns booleans natively; no hydration needed beyond
+  // shaping the result to the shared types.
+  private rowToUser(r: any): User | undefined {
+    return r ? (r as User) : undefined;
+  }
+  private rowToAnalysis(r: any): Analysis | undefined {
+    if (!r) return undefined;
+    return { ...r, is_locked: !!r.is_locked } as Analysis;
+  }
+
+  async getUser(id: number): Promise<User | undefined> {
+    const r = await this.pool.query("SELECT * FROM users WHERE id = $1", [id]);
+    return this.rowToUser(r.rows[0]);
+  }
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const r = await this.pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    return this.rowToUser(r.rows[0]);
+  }
+  async createUser(u: InsertUser): Promise<User> {
+    const r = await this.pool.query(
+      `INSERT INTO users (full_name, email, role, credits, created_date, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        u.full_name,
+        u.email,
+        u.role ?? "user",
+        u.credits ?? 0,
+        u.created_date,
+        u.password_hash ?? null,
+      ],
+    );
+    return r.rows[0] as User;
+  }
+  async listUsers(): Promise<User[]> {
+    const r = await this.pool.query("SELECT * FROM users ORDER BY id");
+    return r.rows as User[];
+  }
+  async setUserCredits(id: number, credits: number): Promise<User | undefined> {
+    const r = await this.pool.query(
+      "UPDATE users SET credits = $1 WHERE id = $2 RETURNING *",
+      [credits, id],
+    );
+    return this.rowToUser(r.rows[0]);
+  }
+  async decrementCredits(id: number): Promise<User | undefined> {
+    const r = await this.pool.query(
+      "UPDATE users SET credits = credits - 1 WHERE id = $1 RETURNING *",
+      [id],
+    );
+    return this.rowToUser(r.rows[0]);
+  }
+  async setUserPassword(id: number, password_hash: string): Promise<User | undefined> {
+    const r = await this.pool.query(
+      "UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING *",
+      [password_hash, id],
+    );
+    return this.rowToUser(r.rows[0]);
+  }
+
+  async createPasswordReset(input: {
+    user_id: number;
+    code_hash: string;
+    created_at: string;
+    expires_at: string;
+  }): Promise<PasswordReset> {
+    const r = await this.pool.query(
+      `INSERT INTO password_resets (user_id, code_hash, created_at, expires_at, used_at)
+       VALUES ($1, $2, $3, $4, NULL)
+       RETURNING *`,
+      [input.user_id, input.code_hash, input.created_at, input.expires_at],
+    );
+    return r.rows[0] as PasswordReset;
+  }
+  async listActivePasswordResetsForUser(user_id: number): Promise<PasswordReset[]> {
+    const r = await this.pool.query(
+      `SELECT * FROM password_resets
+        WHERE user_id = $1 AND used_at IS NULL
+        ORDER BY id DESC`,
+      [user_id],
+    );
+    return r.rows as PasswordReset[];
+  }
+  async markPasswordResetUsed(id: number, used_at: string): Promise<void> {
+    await this.pool.query(
+      "UPDATE password_resets SET used_at = $1 WHERE id = $2",
+      [used_at, id],
+    );
+  }
+  async invalidateOtherPasswordResets(
+    user_id: number,
+    except_id: number,
+    used_at: string,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE password_resets SET used_at = $1
+        WHERE user_id = $2 AND used_at IS NULL AND id <> $3`,
+      [used_at, user_id, except_id],
+    );
+  }
+
+  async appendCreditTransaction(tx: InsertCreditTransaction): Promise<CreditTransaction> {
+    const r = await this.pool.query(
+      `INSERT INTO credit_transactions
+         (user_id, amount_delta, balance_after, reason, reference, provider, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        tx.user_id,
+        tx.amount_delta,
+        tx.balance_after,
+        tx.reason,
+        tx.reference ?? null,
+        tx.provider ?? null,
+        tx.created_at,
+      ],
+    );
+    return r.rows[0] as CreditTransaction;
+  }
+  async listCreditTransactions(user_id: number): Promise<CreditTransaction[]> {
+    const r = await this.pool.query(
+      "SELECT * FROM credit_transactions WHERE user_id = $1 ORDER BY id DESC",
+      [user_id],
+    );
+    return r.rows as CreditTransaction[];
+  }
+  async hasUserRedeemedPromo(user_id: number, promo: string): Promise<boolean> {
+    const r = await this.pool.query(
+      `SELECT 1 FROM credit_transactions
+        WHERE user_id = $1 AND reason = 'promo' AND reference = $2
+        LIMIT 1`,
+      [user_id, promo],
+    );
+    return r.rowCount! > 0;
+  }
+
+  async listResumes(userId: number): Promise<Resume[]> {
+    const r = await this.pool.query(
+      "SELECT * FROM resumes WHERE created_by = $1 ORDER BY id DESC",
+      [userId],
+    );
+    return r.rows as Resume[];
+  }
+  async getResume(id: number): Promise<Resume | undefined> {
+    const r = await this.pool.query("SELECT * FROM resumes WHERE id = $1", [id]);
+    return r.rows[0] as Resume | undefined;
+  }
+  async createResume(r: InsertResume): Promise<Resume> {
+    const out = await this.pool.query(
+      `INSERT INTO resumes
+         (created_date, created_by, filename, content_type, file_url, extracted_text, size_bytes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        r.created_date,
+        r.created_by,
+        r.filename,
+        r.content_type,
+        r.file_url,
+        r.extracted_text,
+        r.size_bytes,
+      ],
+    );
+    return out.rows[0] as Resume;
+  }
+  async deleteResume(id: number): Promise<{ changes: number }> {
+    const r = await this.pool.query("DELETE FROM resumes WHERE id = $1", [id]);
+    return { changes: r.rowCount ?? 0 };
+  }
+
+  async listAnalyses(userId: number): Promise<Analysis[]> {
+    const r = await this.pool.query(
+      "SELECT * FROM analyses WHERE created_by = $1 ORDER BY id DESC",
+      [userId],
+    );
+    return r.rows.map((row) => this.rowToAnalysis(row)!) as Analysis[];
+  }
+  async getAnalysis(id: number): Promise<Analysis | undefined> {
+    const r = await this.pool.query("SELECT * FROM analyses WHERE id = $1", [id]);
+    return this.rowToAnalysis(r.rows[0]);
+  }
+  async createAnalysis(a: InsertAnalysis): Promise<Analysis> {
+    const r = await this.pool.query(
+      `INSERT INTO analyses
+         (created_date, created_by, job_title, job_description, technology_context,
+          resume_id, result_text, provider_used, automation_risk, risk_score, is_locked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [
+        a.created_date,
+        a.created_by,
+        a.job_title,
+        a.job_description,
+        a.technology_context ?? null,
+        a.resume_id ?? null,
+        a.result_text,
+        a.provider_used,
+        a.automation_risk,
+        a.risk_score,
+        !!a.is_locked,
+      ],
+    );
+    return this.rowToAnalysis(r.rows[0])!;
+  }
+  async deleteAnalysis(id: number): Promise<{ changes: number }> {
+    const r = await this.pool.query("DELETE FROM analyses WHERE id = $1", [id]);
+    return { changes: r.rowCount ?? 0 };
+  }
+  async unlockAnalysis(id: number): Promise<Analysis | undefined> {
+    const r = await this.pool.query(
+      "UPDATE analyses SET is_locked = FALSE WHERE id = $1 RETURNING *",
+      [id],
+    );
+    return this.rowToAnalysis(r.rows[0]);
+  }
+}
+
+/* =====================================================================
+ * Backend selection + bootstrap
+ * ===================================================================== */
+const SEEDED_OWNER_EMAIL = "roqueta.alex@gmail.com";
+const SEEDED_OWNER_TEMP_PASSWORD = "Preview2025!"; // documented in handoff only
+const SEEDED_ADMIN_EMAIL = "admin@example.com";
+const SEEDED_ADMIN_TEMP_PASSWORD = "AdminPreview2025!"; // documented in handoff only
+
+function isPostgresUrl(url: string | undefined): url is string {
+  if (!url) return false;
+  const lower = url.trim().toLowerCase();
+  return lower.startsWith("postgres://") || lower.startsWith("postgresql://");
+}
+
+// Exported so tests/scripts can override storage with an isolated DB
+// path (verify-locked-preview etc. already do this).
+export let storage: IStorage = null as unknown as IStorage;
+
+/* Test-only helper: force an analysis row to is_locked=true. The public
+ * API only exposes unlocking — locking happens implicitly during creation
+ * when the actor has zero credits. The payments/credits verification
+ * script needs to lock an already-existing analysis to exercise the
+ * "unlimited entitlement unlocks without ledger row" path, so we expose
+ * a direct setter here. Not part of IStorage to keep the interface
+ * narrow. */
+export async function _setAnalysisLockedForTest(id: number, locked: boolean): Promise<void> {
+  if (storage instanceof SqliteStorage) {
+    (storage as any).sqlite
+      .prepare("UPDATE analyses SET is_locked = ? WHERE id = ?")
+      .run(locked ? 1 : 0, id);
+    return;
+  }
+  if (storage instanceof PostgresStorage) {
+    await (storage as any).pool.query(
+      "UPDATE analyses SET is_locked = $1 WHERE id = $2",
+      [locked, id],
+    );
+    return;
+  }
+  throw new Error("_setAnalysisLockedForTest: unknown storage backend");
+}
+
+export function setStorage(next: IStorage) {
+  storage = next;
+}
+
+/* `initStorage` picks the backend, runs migrations, and bootstraps the
+ * preview accounts. Returns the active storage instance and also
+ * assigns it to the exported `storage` singleton so existing imports
+ * (`import { storage } from "./storage"`) work unchanged. Must be
+ * awaited before any route handler runs. */
+export async function initStorage(opts?: {
+  sqlitePath?: string;
+  databaseUrl?: string;
+}): Promise<IStorage> {
+  const url = opts?.databaseUrl ?? process.env.DATABASE_URL;
+  let next: IStorage;
+  if (isPostgresUrl(url)) {
+    const pg = new PostgresStorage(url);
+    await pg.migrate();
+    next = pg;
+    console.log("[storage] using Postgres backend");
+  } else {
+    next = new SqliteStorage(opts?.sqlitePath ?? "data.db");
+    console.log(
+      `[storage] using SQLite backend at ${opts?.sqlitePath ?? "data.db"}`,
+    );
+  }
+  storage = next;
+  await bootstrap(next);
+  return next;
+}
+
+/* ---------------------------------------------------------------------
+ * Bootstrap the two demo accounts. Idempotent — every startup runs it
+ * but it only writes when rows are missing or password_hash is null.
+ * ------------------------------------------------------------------- */
+async function bootstrap(s: IStorage): Promise<void> {
+  const all = await s.listUsers();
+  if (all.length === 0) {
+    await s.createUser({
+      full_name: "Alex Roqueta",
+      email: SEEDED_OWNER_EMAIL,
+      role: "user",
+      credits: 3,
+      created_date: new Date().toISOString(),
+      password_hash: hashPassword(SEEDED_OWNER_TEMP_PASSWORD),
+    });
+    await s.createUser({
+      full_name: "Jordan Reed (Admin)",
+      email: SEEDED_ADMIN_EMAIL,
+      role: "admin",
+      credits: 999,
+      created_date: new Date().toISOString(),
+      password_hash: hashPassword(SEEDED_ADMIN_TEMP_PASSWORD),
+    });
+    return;
+  }
+
+  // Backfill the seeded owner row + temp passwords for legacy SQLite
+  // databases. The "id=1" rename only applies to SQLite — on Postgres
+  // we look up by email instead so a fresh Postgres deploy doesn't
+  // clobber an admin account that happens to land at id=1.
+  const owner = await s.getUserByEmail(SEEDED_OWNER_EMAIL);
+  if (!owner) {
+    // Legacy SQLite preview: first row exists but has the wrong email.
+    // We only run this rename on SQLite where the legacy demo seeded
+    // an arbitrary email; on Postgres a missing owner row is a fresh
+    // install and we just create it.
+    if (s instanceof SqliteStorage) {
+      (s as any).sqlite
+        .prepare(
+          `UPDATE users SET full_name = ?, email = ? WHERE id = 1
+             AND NOT EXISTS (SELECT 1 FROM users WHERE email = ?)`,
+        )
+        .run("Alex Roqueta", SEEDED_OWNER_EMAIL, SEEDED_OWNER_EMAIL);
+    }
+    // Create on Postgres (or after the rename above on SQLite, if
+    // the rename was a no-op).
+    const stillMissing = await s.getUserByEmail(SEEDED_OWNER_EMAIL);
+    if (!stillMissing) {
+      await s.createUser({
+        full_name: "Alex Roqueta",
+        email: SEEDED_OWNER_EMAIL,
+        role: "user",
+        credits: 3,
+        created_date: new Date().toISOString(),
+        password_hash: hashPassword(SEEDED_OWNER_TEMP_PASSWORD),
+      });
+    }
+  }
+  const ownerFinal = await s.getUserByEmail(SEEDED_OWNER_EMAIL);
+  if (ownerFinal && !ownerFinal.password_hash) {
+    await s.setUserPassword(ownerFinal.id, hashPassword(SEEDED_OWNER_TEMP_PASSWORD));
+  }
+
+  const admin = await s.getUserByEmail(SEEDED_ADMIN_EMAIL);
+  if (!admin) {
+    await s.createUser({
+      full_name: "Jordan Reed (Admin)",
+      email: SEEDED_ADMIN_EMAIL,
+      role: "admin",
+      credits: 999,
+      created_date: new Date().toISOString(),
+      password_hash: hashPassword(SEEDED_ADMIN_TEMP_PASSWORD),
+    });
+  } else if (!admin.password_hash) {
+    await s.setUserPassword(admin.id, hashPassword(SEEDED_ADMIN_TEMP_PASSWORD));
+  }
+}

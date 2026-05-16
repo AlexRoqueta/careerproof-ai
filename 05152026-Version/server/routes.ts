@@ -18,7 +18,6 @@ import {
   setPasswordRequestSchema,
   forgotPasswordRequestSchema,
   resetPasswordRequestSchema,
-  linkedinImportSchema,
 } from "@shared/schema";
 import { hashPassword, verifyPassword } from "./password";
 import { randomInt } from "node:crypto";
@@ -31,13 +30,7 @@ import {
 } from "@shared/entitlements";
 import { paymentProvider } from "./payments";
 import type { CreditTransaction } from "@shared/schema";
-import {
-  generateAnalysis,
-  generateAutofill,
-  prefillFromResumeText,
-  parseLinkedInJobText,
-  toTitleCase,
-} from "./ai";
+import { generateAnalysis, generateAutofill, prefillFromResumeText, toTitleCase } from "./ai";
 import type { Analysis } from "@shared/schema";
 import { rateLimit, keyByIp, keyByEmailAndIp } from "./rate-limit";
 import { getConfigReport } from "./config";
@@ -244,12 +237,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const limitCheckoutCreate = rateLimit({ scope: "checkout-create", max: 20, windowMs: 60_000, keyFn: keyByIp });
   const limitCheckoutComplete = rateLimit({ scope: "checkout-complete", max: 30, windowMs: 60_000, keyFn: keyByIp });
   const limitUnlock = rateLimit({ scope: "unlock", max: 20, windowMs: 60_000, keyFn: keyByIp });
-  const limitLinkedinImport = rateLimit({
-    scope: "linkedin-import",
-    max: 10,
-    windowMs: 60_000,
-    keyFn: keyByIp,
-  });
 
   /* --------------- Identity / Auth simulation --------------- */
   app.get("/api/me", async (_req: Request, res: Response) => {
@@ -654,127 +641,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const parsed = autofillRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     res.json(generateAutofill(parsed.data.job_title));
-  });
-
-  /* --------------- LinkedIn job import ---------------
-   *
-   * LinkedIn does not offer a stable public scrape surface. Most
-   * server-side fetches against a job URL return an auth wall or a
-   * heavily-redacted shell. The endpoint therefore:
-   *
-   *   1. Trusts pasted text first — that's the supported path. If the
-   *      caller provides `pasted_text`, the URL fetch is skipped.
-   *   2. Otherwise attempts a single GET against the URL on a short
-   *      timeout (default 6s) with a generic User-Agent. The response
-   *      body is parsed for a JSON-LD JobPosting block (the most
-   *      reliable signal when available) and then for visible text.
-   *   3. Always returns 200 with `{ source, parsed, warning? }`. The
-   *      `source` field is one of "pasted" | "fetch" | "fetch-failed".
-   *      A `fetch-failed` source surfaces a warning string the UI shows
-   *      to nudge the user toward the paste / manual fallback.
-   *
-   * No LinkedIn credentials are accepted, sent, or stored. */
-  app.post("/api/linkedin/import", limitLinkedinImport, async (req: Request, res: Response) => {
-    const parsed = linkedinImportSchema.safeParse(req.body);
-    if (!parsed.success) {
-      const first = parsed.error.issues[0];
-      return res.status(400).json({ error: first?.message ?? "Invalid input" });
-    }
-    const url = parsed.data.url?.trim() ?? "";
-    const pasted = parsed.data.pasted_text?.trim() ?? "";
-
-    // Pasted text is the primary supported path.
-    if (pasted) {
-      const result = parseLinkedInJobText(pasted);
-      return res.json({ source: "pasted", parsed: result });
-    }
-
-    // URL-only path: attempt a best-effort fetch. We never throw on
-    // failure — the UI is expected to gracefully fall back to manual
-    // entry or pasted-text input.
-    if (!url) {
-      // Defensive: schema refine should have rejected this already.
-      return res.status(400).json({ error: "Provide a LinkedIn URL or paste the job text." });
-    }
-
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      return res.status(400).json({ error: "That doesn't look like a valid URL." });
-    }
-    if (!/^https?:$/.test(parsedUrl.protocol)) {
-      return res.status(400).json({ error: "URL must be http or https." });
-    }
-    if (!/(^|\.)linkedin\.com$/i.test(parsedUrl.hostname)) {
-      return res.status(400).json({
-        error: "URL must be a LinkedIn job link (linkedin.com).",
-      });
-    }
-
-    const controller = new AbortController();
-    const timeoutMs = 6000;
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const upstream = await fetch(parsedUrl.toString(), {
-        method: "GET",
-        redirect: "follow",
-        signal: controller.signal,
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (compatible; CareerProofAI/1.0; +https://careerproof.ai)",
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.5",
-        },
-      });
-      clearTimeout(timer);
-      if (!upstream.ok) {
-        return res.json({
-          source: "fetch-failed",
-          parsed: { job_title: "", company: "", location: "", job_description: "" },
-          warning:
-            `LinkedIn responded with HTTP ${upstream.status}. Paste the job text from LinkedIn into the box below instead — it works reliably.`,
-        });
-      }
-      const contentType = upstream.headers.get("content-type") ?? "";
-      if (!/text\/html|application\/xhtml/i.test(contentType)) {
-        return res.json({
-          source: "fetch-failed",
-          parsed: { job_title: "", company: "", location: "", job_description: "" },
-          warning:
-            "LinkedIn didn't return a readable HTML page. Paste the job text from LinkedIn into the box below instead.",
-        });
-      }
-      // Cap the read so a giant page (or a redirect to a feed) doesn't
-      // waste memory. 1.5MB is plenty for a job posting.
-      const buf = await upstream
-        .clone()
-        .arrayBuffer()
-        .then((b) => Buffer.from(b).slice(0, 1_500_000).toString("utf8"));
-      const result = parseLinkedInJobText(buf);
-      const usable =
-        Boolean(result.job_title) ||
-        (result.job_description && result.job_description.length > 80);
-      if (!usable) {
-        return res.json({
-          source: "fetch-failed",
-          parsed: result,
-          warning:
-            "We reached LinkedIn but couldn't read the job details (LinkedIn likely showed a sign-in wall). Paste the job text from LinkedIn into the box below instead.",
-        });
-      }
-      return res.json({ source: "fetch", parsed: result });
-    } catch (err: any) {
-      clearTimeout(timer);
-      const aborted = err?.name === "AbortError";
-      return res.json({
-        source: "fetch-failed",
-        parsed: { job_title: "", company: "", location: "", job_description: "" },
-        warning: aborted
-          ? "Fetching the LinkedIn page timed out. Paste the job text from LinkedIn into the box below instead."
-          : "We couldn't fetch that LinkedIn URL. Paste the job text from LinkedIn into the box below instead.",
-      });
-    }
   });
 
   /* --------------- Analyses --------------- */

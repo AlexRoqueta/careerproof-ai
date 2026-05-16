@@ -93,38 +93,6 @@ export const prefillFromResumeSchema = z.object({
   resume_id: z.number(),
 });
 
-/* =====================================================================
- * LinkedIn job import
- *
- * Accepts a LinkedIn job URL (e.g. https://www.linkedin.com/jobs/view/...)
- * and/or pasted text copied from a LinkedIn job page. The server attempts
- * to fetch the URL on a short timeout — many LinkedIn responses are
- * gated, partial, or return an auth wall, so the request must always
- * succeed even when fetching fails, and the response indicates which
- * source actually produced the parsed fields. If neither source yields
- * usable text the client is expected to fall back to manual entry.
- * ===================================================================== */
-export const linkedinImportSchema = z
-  .object({
-    url: z
-      .string()
-      .trim()
-      .max(2048, "URL is too long")
-      .optional()
-      .or(z.literal("")),
-    pasted_text: z
-      .string()
-      .trim()
-      .max(50_000, "Pasted text is too long")
-      .optional()
-      .or(z.literal("")),
-  })
-  .refine(
-    (d) => Boolean((d.url && d.url.length) || (d.pasted_text && d.pasted_text.length)),
-    { message: "Provide a LinkedIn URL or paste the job text." },
-  );
-export type LinkedInImportRequest = z.infer<typeof linkedinImportSchema>;
-
 export const uploadResumeSchema = z.object({
   filename: z.string().min(1),
   content_type: z.string().min(1),

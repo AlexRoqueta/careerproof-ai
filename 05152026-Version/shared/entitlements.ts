@@ -1,0 +1,80 @@
+export const UNLIMITED_CREDIT_EMAILS = ["roqueta.alex@gmail.com"];
+
+/* Promo codes are intentionally case-insensitive on the server.
+ * The single redemption rule is enforced server-side via the credit
+ * ledger — not via a stored "redeemed" flag on the user. */
+export const FREE_CREDITS_PROMO_CODE = "10FREE";
+export const FREE_CREDITS_PROMO_AMOUNT = 10;
+
+export function hasUnlimitedCredits(email?: string | null, role?: string | null): boolean {
+  if (role === "admin") return true;
+  const normalized = email?.trim().toLowerCase();
+  return !!normalized && UNLIMITED_CREDIT_EMAILS.includes(normalized);
+}
+
+/* =====================================================================
+ * Credit package catalog
+ *
+ * This is the SINGLE source of truth for credit packages — referenced
+ * by both the Credits page (price tiles, checkout button) and the
+ * payment provider on the server (price lookup, ledger entries).
+ *
+ * `id` is opaque and stable; it is what the client posts to the
+ * /api/payments/create-checkout endpoint and what the ledger records
+ * as the purchase reference. Production deployments should keep the
+ * id stable across provider changes so old transaction history rows
+ * still resolve to a human label.
+ *
+ * `price_cents` is purely informational here. The chosen payment
+ * provider is the authoritative source for what the buyer is charged.
+ * ===================================================================== */
+export interface CreditPackage {
+  id: string;
+  name: string;
+  description: string;
+  credits: number;
+  price_cents: number;
+  currency: "USD";
+  popular?: boolean;
+}
+
+export const CREDIT_PACKAGES: CreditPackage[] = [
+  {
+    id: "starter_1",
+    name: "Starter",
+    description: "One assessment — try it out",
+    credits: 1,
+    price_cents: 300,
+    currency: "USD",
+  },
+  {
+    id: "standard_3",
+    name: "Standard",
+    description: "Three assessments — most popular",
+    credits: 3,
+    price_cents: 700,
+    currency: "USD",
+    popular: true,
+  },
+  {
+    id: "value_5",
+    name: "Value Pack",
+    description: "Five assessments — best per-credit price",
+    credits: 5,
+    price_cents: 1000,
+    currency: "USD",
+  },
+];
+
+export function findCreditPackage(id: string): CreditPackage | undefined {
+  return CREDIT_PACKAGES.find((p) => p.id === id);
+}
+
+export function formatPrice(price_cents: number, currency: "USD" = "USD"): string {
+  const dollars = price_cents / 100;
+  const formatted = dollars.toLocaleString("en-US", {
+    minimumFractionDigits: dollars % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+  return `$${formatted} ${currency}`;
+}

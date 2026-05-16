@@ -17,10 +17,6 @@ import {
   FileText,
   CheckCircle2,
   X as XIcon,
-  Linkedin,
-  Keyboard,
-  Info,
-  Download,
 } from "lucide-react";
 import { MicButton } from "@/components/MicButton";
 import { BuyCreditsModal } from "@/components/BuyCreditsModal";
@@ -63,11 +59,6 @@ export default function Analyze() {
   const [lastUploadedResume, setLastUploadedResume] = useState<Resume | null>(null);
   const [showBuy, setShowBuy] = useState(false);
   const [resultAnalysis, setResultAnalysis] = useState<Analysis | null>(null);
-  const [linkedinUrl, setLinkedinUrl] = useState("");
-  const [linkedinPasted, setLinkedinPasted] = useState("");
-  const [linkedinWarning, setLinkedinWarning] = useState<string | null>(null);
-  const [linkedinCompany, setLinkedinCompany] = useState("");
-  const [linkedinLocation, setLinkedinLocation] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const prefillAbortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -101,11 +92,6 @@ export default function Analyze() {
     setJobTitle("");
     setJobDescription("");
     setTechContext("");
-    setLinkedinUrl("");
-    setLinkedinPasted("");
-    setLinkedinWarning(null);
-    setLinkedinCompany("");
-    setLinkedinLocation("");
   };
 
   const autofillMutation = useMutation({
@@ -119,62 +105,6 @@ export default function Analyze() {
       toast({ title: "Fields auto-filled", description: "Review and refine before generating." });
     },
     onError: () => toast({ title: "Auto-fill failed", variant: "destructive" }),
-  });
-
-  type LinkedInImportResponse = {
-    source: "pasted" | "fetch" | "fetch-failed";
-    parsed: { job_title: string; company: string; location: string; job_description: string };
-    warning?: string;
-  };
-
-  const linkedinImportMutation = useMutation({
-    mutationFn: async () => {
-      const url = linkedinUrl.trim();
-      const pasted_text = linkedinPasted.trim();
-      const res = await apiRequest("POST", "/api/linkedin/import", {
-        url: url || undefined,
-        pasted_text: pasted_text || undefined,
-      });
-      return res.json() as Promise<LinkedInImportResponse>;
-    },
-    onSuccess: (data) => {
-      setLinkedinWarning(data.warning ?? null);
-      const { parsed, source, warning } = data;
-      if (parsed.job_title) setJobTitle(parsed.job_title);
-      if (parsed.job_description) setJobDescription(parsed.job_description);
-      if (parsed.company) setLinkedinCompany(parsed.company);
-      if (parsed.location) setLinkedinLocation(parsed.location);
-
-      if (source === "fetch-failed") {
-        toast({
-          title: "Couldn't reach LinkedIn",
-          description:
-            warning ?? "Paste the job text from LinkedIn into the box below — it works reliably.",
-        });
-        return;
-      }
-      if (!parsed.job_title && !parsed.job_description) {
-        toast({
-          title: "Nothing recognisable",
-          description:
-            "Couldn't extract a job title or description. Try pasting the full job description text from LinkedIn.",
-        });
-        return;
-      }
-      toast({
-        title: "LinkedIn job imported",
-        description: source === "fetch" ? "Fetched from URL — review and edit before generating." : "Parsed from pasted text — review and edit before generating.",
-      });
-    },
-    onError: (err: any) => {
-      const message = String(err?.message ?? "Unknown error");
-      const friendly = message.replace(/^\d+:\s*/, "");
-      toast({
-        title: "LinkedIn import failed",
-        description: friendly || "Try pasting the LinkedIn job text instead.",
-        variant: "destructive",
-      });
-    },
   });
 
   const prefillFromResume = useMutation({
@@ -353,123 +283,6 @@ export default function Analyze() {
           </p>
         </div>
       </div>
-
-      {/* Four ways to provide job info */}
-      <Card data-testid="card-input-methods" className="border-primary/20 bg-primary/[0.03]">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Info className="w-4 h-4 text-primary" />
-            Four ways to give us the job info
-          </CardTitle>
-          <CardDescription>Pick whichever is easiest — you can mix and match, and you can always edit the fields by hand before generating.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid sm:grid-cols-2 gap-3 text-sm">
-            <div className="flex items-start gap-2.5 p-3 rounded-md border border-border/60 bg-background">
-              <Keyboard className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
-              <div>
-                <div className="font-medium">Type it in</div>
-                <div className="text-muted-foreground text-xs mt-0.5">Key the job title and description manually in the fields below.</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5 p-3 rounded-md border border-border/60 bg-background">
-              <Zap className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
-              <div>
-                <div className="font-medium">Just the job title</div>
-                <div className="text-muted-foreground text-xs mt-0.5">Enter the title only and tap <strong>Auto-fill fields</strong> — AI fills the rest.</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5 p-3 rounded-md border border-border/60 bg-background">
-              <Upload className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
-              <div>
-                <div className="font-medium">Upload a resume</div>
-                <div className="text-muted-foreground text-xs mt-0.5">PDF or DOCX — we pre-fill the role details from it.</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-2.5 p-3 rounded-md border border-border/60 bg-background">
-              <Linkedin className="w-4 h-4 mt-0.5 text-primary flex-shrink-0" />
-              <div>
-                <div className="font-medium">Import from LinkedIn</div>
-                <div className="text-muted-foreground text-xs mt-0.5">Paste a LinkedIn job URL or the visible job text — we extract title and description.</div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* LinkedIn import */}
-      <Card data-testid="card-linkedin-import">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Linkedin className="w-4 h-4 text-primary" />
-            Import from LinkedIn <span className="text-xs font-normal text-muted-foreground ml-1">(optional)</span>
-          </CardTitle>
-          <CardDescription>
-            Paste a LinkedIn job URL <em>and/or</em> the visible job text. We try the URL first, then fall back to your pasted text. No LinkedIn login is required and credentials are never collected.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="linkedin_url" className="text-sm">LinkedIn job URL</Label>
-            <Input
-              id="linkedin_url"
-              value={linkedinUrl}
-              onChange={(e) => setLinkedinUrl(e.target.value)}
-              placeholder="https://www.linkedin.com/jobs/view/..."
-              data-testid="input-linkedin-url"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <p className="text-xs text-muted-foreground">
-              Many LinkedIn pages require a login, so URL fetching can fail. If it does, paste the job text below.
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="linkedin_text" className="text-sm">Or paste the job text from LinkedIn</Label>
-            <Textarea
-              id="linkedin_text"
-              value={linkedinPasted}
-              onChange={(e) => setLinkedinPasted(e.target.value)}
-              placeholder={"Open the LinkedIn job, select the visible job text (title, company, location, full description), copy, and paste it here."}
-              rows={5}
-              className="resize-none"
-              data-testid="input-linkedin-text"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <Button
-              variant="secondary"
-              onClick={() => linkedinImportMutation.mutate()}
-              disabled={
-                linkedinImportMutation.isPending ||
-                (!linkedinUrl.trim() && !linkedinPasted.trim())
-              }
-              data-testid="button-linkedin-import"
-            >
-              {linkedinImportMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4 mr-2" />
-              )}
-              Import from LinkedIn
-            </Button>
-            {(linkedinCompany || linkedinLocation) && (
-              <span className="text-xs text-muted-foreground">
-                {linkedinCompany && <span data-testid="linkedin-company"><strong>{linkedinCompany}</strong></span>}
-                {linkedinCompany && linkedinLocation && <span> · </span>}
-                {linkedinLocation && <span data-testid="linkedin-location">{linkedinLocation}</span>}
-              </span>
-            )}
-          </div>
-          {linkedinWarning && (
-            <Alert variant="default" data-testid="alert-linkedin-warning">
-              <AlertTriangle className="w-4 h-4" />
-              <AlertTitle>Couldn't fetch from LinkedIn</AlertTitle>
-              <AlertDescription>{linkedinWarning}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Resume source */}
       <Card data-testid="card-resume-source">
