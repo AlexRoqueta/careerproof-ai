@@ -43,6 +43,42 @@ process.chdir(tmpDir);
 // is deterministic.
 process.env.ALLOW_PREVIEW_RESET_CODE = "1";
 
+// Make sure no real email gets dispatched from this script — point the
+// email pipeline at a local capture so we can ALSO assert that the
+// forgot-password route actually invokes the provider when one is set.
+const sentEmails: Array<{ to: string; subject?: string; body?: string; auth?: string; from?: string }> = [];
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async (input: any, init: any) => {
+  const url = typeof input === "string" ? input : input?.url ?? "";
+  if (typeof url === "string" && url.startsWith("https://api.resend.com/")) {
+    let body: any = {};
+    try {
+      body = init?.body ? JSON.parse(String(init.body)) : {};
+    } catch {
+      body = { raw: String(init?.body ?? "") };
+    }
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    sentEmails.push({
+      to: Array.isArray(body?.to) ? body.to[0] : body?.to,
+      subject: body?.subject,
+      body: body?.text,
+      auth: headers["Authorization"] ?? headers["authorization"],
+      from: body?.from,
+    });
+    return new Response(JSON.stringify({ id: `mock_${Date.now()}` }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return originalFetch(input, init);
+}) as typeof fetch;
+
+// Configure the route's email pipeline to "resend" so selectEmailProvider()
+// returns "resend" and our fetch stub captures the outbound request.
+process.env.EMAIL_PROVIDER = "resend";
+process.env.EMAIL_API_KEY = "test_resend_api_key_DO_NOT_LOG";
+process.env.EMAIL_FROM = "CareerProof <noreply@careerproof.app>";
+
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
@@ -151,6 +187,44 @@ try {
     typeof previewCode === "string" && /^\d{6}$/.test(previewCode),
     "preview build exposes a 6-digit preview_code for the known email",
     forgotKnown.json,
+  );
+
+  /* -------- 2a. Forgot-password actually invokes the email provider -------- */
+  // The fetch stub above captures Resend API calls. The known-email
+  // request above MUST have produced exactly one Resend invocation
+  // addressed to that email. The unknown-email request MUST NOT have
+  // produced one (no DB user → no send).
+  const knownSends = sentEmails.filter((m) => m.to === knownEmail);
+  assert(
+    knownSends.length === 1,
+    "forgot-password for known email invokes Resend exactly once",
+    { captured: sentEmails.length, knownSends: knownSends.length },
+  );
+  if (knownSends.length === 1) {
+    const send = knownSends[0]!;
+    assert(
+      typeof send.subject === "string" && /reset|password/i.test(send.subject ?? ""),
+      "reset email subject mentions reset/password",
+      { subject: send.subject },
+    );
+    assert(
+      typeof send.body === "string" && send.body.includes(previewCode!),
+      "reset email body includes the issued reset code",
+    );
+    assert(
+      typeof send.auth === "string" && send.auth.startsWith("Bearer "),
+      "Resend call uses Bearer auth header",
+    );
+    assert(
+      typeof send.from === "string" && send.from.length > 0,
+      "Resend call sets a from address from EMAIL_FROM",
+    );
+  }
+  const unknownSends = sentEmails.filter((m) => m.to === unknownEmail);
+  assert(
+    unknownSends.length === 0,
+    "forgot-password for unknown email does NOT invoke Resend",
+    { unknownSends: unknownSends.length },
   );
 
   /* -------- 3. Reset with wrong code -------- */

@@ -34,6 +34,7 @@ import { generateAnalysis, generateAutofill, prefillFromResumeText, toTitleCase 
 import type { Analysis } from "@shared/schema";
 import { rateLimit, keyByIp, keyByEmailAndIp } from "./rate-limit";
 import { getConfigReport } from "./config";
+import { sendPasswordResetEmail, selectEmailProvider } from "./email";
 
 /* Server-side redaction for locked analyses.
  *
@@ -87,6 +88,18 @@ function redactLockedMarkdown(md: string): string {
 function sanitizeAnalysisForResponse(a: Analysis): Analysis {
   if (!a.is_locked) return a;
   return { ...a, result_text: redactLockedMarkdown(a.result_text) };
+}
+
+/* Build a best-effort absolute URL for the current site from a request.
+ * Used by transactional emails when APP_BASE_URL is not set explicitly
+ * (preview / local dev). server/index.ts sets `trust proxy`, so
+ * req.protocol reflects the public scheme behind a TLS-terminating
+ * proxy. Returns undefined when no host header is available. */
+function inferBaseUrlFromRequest(req: Request): string | undefined {
+  const host = req.get("host");
+  if (!host) return undefined;
+  const proto = req.protocol || "https";
+  return `${proto}://${host}`;
 }
 
 /* Parse the loopback URL the preview provider builds so the client can
@@ -390,6 +403,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // a non-preview production build.
       if (PREVIEW_CODE_ENABLED) {
         genericResponse.preview_code = code;
+      }
+      // Fire-and-await the configured email pipeline. Failures are
+      // logged but never surfaced to the caller — the route always
+      // returns the same generic 200 to avoid leaking which emails are
+      // attached to real accounts. The `delivered` boolean is captured
+      // for server logs only.
+      const provider = selectEmailProvider();
+      if (provider !== "none") {
+        try {
+          const appBaseUrl = process.env.APP_BASE_URL?.trim() || inferBaseUrlFromRequest(req);
+          const result = await sendPasswordResetEmail({
+            to: email,
+            code,
+            ttlMinutes: RESET_CODE_TTL_MINUTES,
+            appBaseUrl,
+          });
+          if (!result.delivered) {
+            console.warn(
+              `[forgot-password] email send failed via provider=${result.provider} reason=${result.reason ?? "unknown"}`,
+            );
+          }
+        } catch (err) {
+          // Never let an email failure break the generic 200 response.
+          const reason = err instanceof Error ? err.message : String(err);
+          console.error(`[forgot-password] unexpected send error: ${reason}`);
+        }
+      } else {
+        console.warn(
+          "[forgot-password] no email provider configured — reset code will not be delivered. Set EMAIL_PROVIDER=resend (plus EMAIL_API_KEY and EMAIL_FROM) or RESET_DELIVERY_MODE=log.",
+        );
       }
     }
     res.json(genericResponse);
