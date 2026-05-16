@@ -36,6 +36,7 @@ import {
   generateAutofill,
   prefillFromResumeText,
   parseLinkedInJobText,
+  extractLinkedInJobWithAI,
   toTitleCase,
 } from "./ai";
 import type { Analysis } from "@shared/schema";
@@ -683,10 +684,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const url = parsed.data.url?.trim() ?? "";
     const pasted = parsed.data.pasted_text?.trim() ?? "";
 
-    // Pasted text is the primary supported path.
+    // Pasted text is the primary supported path. Try AI extraction first
+    // when a provider is configured; the helper internally falls back to
+    // the heuristic parser if the LLM is unavailable, times out, or
+    // returns malformed output, so this call never throws.
     if (pasted) {
-      const result = parseLinkedInJobText(pasted);
-      return res.json({ source: "pasted", parsed: result });
+      const result = await extractLinkedInJobWithAI(pasted);
+      return res.json({
+        source: "pasted",
+        engine: result.source_engine,
+        parsed: {
+          job_title: result.job_title,
+          company: result.company,
+          location: result.location,
+          job_description: result.job_description,
+          technology_context: result.technology_context ?? "",
+          employment_type: result.employment_type ?? "",
+          seniority: result.seniority ?? "",
+        },
+        ...(result.ai_error ? { ai_warning: "Used heuristic fallback for paste extraction." } : {}),
+      });
     }
 
     // URL-only path: attempt a best-effort fetch. We never throw on
@@ -731,7 +748,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!upstream.ok) {
         return res.json({
           source: "fetch-failed",
-          parsed: { job_title: "", company: "", location: "", job_description: "" },
+          engine: "heuristic",
+          parsed: { job_title: "", company: "", location: "", job_description: "", technology_context: "", employment_type: "", seniority: "" },
           warning:
             `LinkedIn responded with HTTP ${upstream.status}. Paste the job text from LinkedIn into the box below instead — it works reliably.`,
         });
@@ -740,7 +758,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!/text\/html|application\/xhtml/i.test(contentType)) {
         return res.json({
           source: "fetch-failed",
-          parsed: { job_title: "", company: "", location: "", job_description: "" },
+          engine: "heuristic",
+          parsed: { job_title: "", company: "", location: "", job_description: "", technology_context: "", employment_type: "", seniority: "" },
           warning:
             "LinkedIn didn't return a readable HTML page. Paste the job text from LinkedIn into the box below instead.",
         });
@@ -751,19 +770,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .clone()
         .arrayBuffer()
         .then((b) => Buffer.from(b).slice(0, 1_500_000).toString("utf8"));
-      const result = parseLinkedInJobText(buf);
+      const fetched = parseLinkedInJobText(buf);
       const usable =
-        Boolean(result.job_title) ||
-        (result.job_description && result.job_description.length > 80);
+        Boolean(fetched.job_title) ||
+        (fetched.job_description && fetched.job_description.length > 80);
       if (!usable) {
         return res.json({
           source: "fetch-failed",
-          parsed: result,
+          engine: "heuristic",
+          parsed: {
+            job_title: fetched.job_title,
+            company: fetched.company,
+            location: fetched.location,
+            job_description: fetched.job_description,
+            technology_context: "",
+            employment_type: "",
+            seniority: "",
+          },
           warning:
             "We reached LinkedIn but couldn't read the job details (LinkedIn likely showed a sign-in wall). Paste the job text from LinkedIn into the box below instead.",
         });
       }
-      return res.json({ source: "fetch", parsed: result });
+      // Run AI extraction on the fetched text too — it's the same shape
+      // the paste path sees. The helper falls back to the heuristic
+      // result on any failure.
+      const enriched = await extractLinkedInJobWithAI(buf);
+      return res.json({
+        source: "fetch",
+        engine: enriched.source_engine,
+        parsed: {
+          job_title: enriched.job_title || fetched.job_title,
+          company: enriched.company || fetched.company,
+          location: enriched.location || fetched.location,
+          job_description: enriched.job_description || fetched.job_description,
+          technology_context: enriched.technology_context ?? "",
+          employment_type: enriched.employment_type ?? "",
+          seniority: enriched.seniority ?? "",
+        },
+      });
     } catch (err: any) {
       clearTimeout(timer);
       const aborted = err?.name === "AbortError";

@@ -376,6 +376,12 @@ export interface LinkedInParsedJob {
   company: string;
   location: string;
   job_description: string;
+  /* Optional enrichment fields populated by the AI extraction path. The
+   * heuristic parser leaves these empty; the route handler treats them as
+   * best-effort hints the UI can show or ignore. */
+  technology_context?: string;
+  employment_type?: string;
+  seniority?: string;
 }
 
 /* Strip HTML tags from a string, decode the few entities LinkedIn job
@@ -1065,4 +1071,289 @@ export function prefillFromResumeText(extracted_text: string): {
     job_description: af.job_description,
     technology_context: af.technology_context,
   };
+}
+
+/* =====================================================================
+ * AI extraction for pasted LinkedIn job text
+ *
+ * The heuristic parser above (parseLinkedInJobText) does a reasonable
+ * job of lifting title/company/location/description out of pasted text,
+ * but it cannot reason about messy paste shapes, missing headers, or
+ * inferred fields like technology_context. When an LLM provider is
+ * configured (LLM_API_KEY env var set), we send the pasted text to the
+ * model with a strict JSON schema and use its output to populate the
+ * available Analyze fields. The heuristic parser remains the fallback
+ * when the provider is unavailable, errors, times out, or returns
+ * malformed output — the route therefore always produces a useful
+ * result.
+ *
+ * No secrets are ever logged. We log only:
+ *   - The provider name (anthropic / openai / mock)
+ *   - The character length of the input
+ *   - The number of fields the AI populated
+ *   - Error class names for diagnosis (never the raw error body)
+ *
+ * Tests inject a mock LLM via __setLlmFetcherForTests so verification
+ * does not require a live network call or a real API key.
+ * ===================================================================== */
+
+export interface LinkedInAiExtraction extends LinkedInParsedJob {
+  /* Reports which path produced the result so the route handler can
+   * surface a hint to the UI ("imported with AI" vs "imported"). */
+  source_engine: "ai" | "heuristic";
+  /* When the AI path errored, the heuristic result is returned and the
+   * error class name is included for diagnostics. Never contains
+   * secrets or user input. */
+  ai_error?: string;
+}
+
+type LlmFetcher = (args: {
+  provider: "anthropic" | "openai";
+  apiKey: string;
+  model: string;
+  prompt: string;
+  signal?: AbortSignal;
+}) => Promise<string>;
+
+let llmFetcherOverride: LlmFetcher | null = null;
+
+/* Test-only seam — lets verification scripts inject a deterministic
+ * mock LLM response without touching network or env vars. Not exported
+ * via the route layer. */
+export function __setLlmFetcherForTests(fn: LlmFetcher | null): void {
+  llmFetcherOverride = fn;
+}
+
+const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+
+function llmConfigFromEnv(): { provider: "anthropic" | "openai"; apiKey: string; model: string } | null {
+  // Explicit overrides win.
+  const explicitProvider = (process.env.LLM_PROVIDER ?? "").trim().toLowerCase();
+  const apiKey = (process.env.LLM_API_KEY ?? "").trim();
+  if (apiKey) {
+    if (explicitProvider === "openai") {
+      return {
+        provider: "openai",
+        apiKey,
+        model: (process.env.LLM_MODEL ?? "").trim() || DEFAULT_OPENAI_MODEL,
+      };
+    }
+    // Default to Anthropic when LLM_API_KEY is present.
+    return {
+      provider: "anthropic",
+      apiKey,
+      model: (process.env.LLM_MODEL ?? "").trim() || DEFAULT_ANTHROPIC_MODEL,
+    };
+  }
+  // Fall back to provider-specific envs.
+  const anthropicKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if (anthropicKey) {
+    return {
+      provider: "anthropic",
+      apiKey: anthropicKey,
+      model: (process.env.LLM_MODEL ?? "").trim() || DEFAULT_ANTHROPIC_MODEL,
+    };
+  }
+  const openaiKey = (process.env.OPENAI_API_KEY ?? "").trim();
+  if (openaiKey) {
+    return {
+      provider: "openai",
+      apiKey: openaiKey,
+      model: (process.env.LLM_MODEL ?? "").trim() || DEFAULT_OPENAI_MODEL,
+    };
+  }
+  return null;
+}
+
+/* Default network LLM caller — Anthropic Messages API or OpenAI Chat
+ * Completions, returning the model's text content. No SDK dependency
+ * is added; both providers expose simple JSON HTTP endpoints. The body
+ * is shaped to coax JSON-only output. */
+const defaultLlmFetcher: LlmFetcher = async ({ provider, apiKey, model, prompt, signal }) => {
+  if (provider === "anthropic") {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`anthropic_http_${res.status}`);
+    }
+    const json: any = await res.json();
+    const block = Array.isArray(json?.content) ? json.content.find((b: any) => b?.type === "text") : null;
+    return typeof block?.text === "string" ? block.text : "";
+  }
+  // openai
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`openai_http_${res.status}`);
+  }
+  const json: any = await res.json();
+  const text = json?.choices?.[0]?.message?.content;
+  return typeof text === "string" ? text : "";
+};
+
+const EXTRACTION_PROMPT_PREAMBLE = [
+  "You are an extraction assistant. Given pasted LinkedIn job-posting text,",
+  "produce STRICT JSON with these keys and nothing else:",
+  '  {"job_title": string, "company": string, "location": string,',
+  '   "job_description": string, "technology_context": string,',
+  '   "employment_type": string, "seniority": string}',
+  "Rules:",
+  "- Strings only. Use empty string when a field is not present in the text.",
+  "- job_title: the role being hired for (NOT the candidate name).",
+  "- company: hiring organization name (omit suffixes like \"Inc.\" only if obvious).",
+  "- location: city/region/country and remote/hybrid/onsite when stated.",
+  "- job_description: clean prose describing the role's responsibilities,",
+  "  requirements, qualifications. Strip LinkedIn chrome (Apply, Save,",
+  "  applicants count, posted-N-days-ago, Report this job). Preserve bullets",
+  "  as plain dashes. Cap at ~6000 characters.",
+  "- technology_context: 1-3 sentences naming the tools, platforms, or",
+  "  frameworks the role typically uses based on the description. If the",
+  "  posting doesn't say, infer common ones for the role. May be empty.",
+  "- employment_type: one of \"Full-time\", \"Part-time\", \"Contract\",",
+  "  \"Temporary\", \"Internship\", or empty.",
+  "- seniority: one of \"Intern\", \"Entry\", \"Mid\", \"Senior\", \"Lead\",",
+  "  \"Manager\", \"Director\", \"Executive\", or empty.",
+  "Return ONLY the JSON object — no prose, no markdown, no code fences.",
+].join("\n");
+
+function buildExtractionPrompt(rawText: string): string {
+  // Cap input to keep tokens (and cost) bounded. 24k characters is more
+  // than enough for any realistic job posting.
+  const capped = rawText.length > 24_000 ? `${rawText.slice(0, 24_000)}\n…[truncated]` : rawText;
+  return `${EXTRACTION_PROMPT_PREAMBLE}\n\nPASTED TEXT:\n"""\n${capped}\n"""`;
+}
+
+function tryParseExtractionJson(raw: string): Partial<LinkedInParsedJob> | null {
+  if (!raw) return null;
+  // The model sometimes wraps JSON in code fences despite the instruction.
+  let s = raw.trim();
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) s = fenced[1].trim();
+  // Or appends prose after the object. Slice from the first { to the
+  // matching closing }.
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+  const slice = s.slice(firstBrace, lastBrace + 1);
+  try {
+    const obj = JSON.parse(slice);
+    if (!obj || typeof obj !== "object") return null;
+    const asString = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+    return {
+      job_title: asString(obj.job_title),
+      company: asString(obj.company),
+      location: asString(obj.location),
+      job_description: asString(obj.job_description),
+      technology_context: asString(obj.technology_context),
+      employment_type: asString(obj.employment_type),
+      seniority: asString(obj.seniority),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* Public: extract LinkedIn job fields from pasted text using AI when a
+ * provider is configured, otherwise (or on any error) fall back to the
+ * heuristic parser. Always returns a usable object — never throws. */
+export async function extractLinkedInJobWithAI(
+  rawInput: string,
+  opts?: { timeoutMs?: number },
+): Promise<LinkedInAiExtraction> {
+  const heuristic = parseLinkedInJobText(rawInput);
+  const text = (rawInput ?? "").trim();
+  if (!text) {
+    return { ...heuristic, source_engine: "heuristic" };
+  }
+
+  const cfg = llmConfigFromEnv();
+  const fetcher = llmFetcherOverride;
+  // No provider AND no test override -> heuristic only.
+  if (!cfg && !fetcher) {
+    return { ...heuristic, source_engine: "heuristic" };
+  }
+
+  const timeoutMs = Math.max(1_000, Math.min(opts?.timeoutMs ?? 15_000, 60_000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const callArgs = {
+      // Tests get a synthetic provider tag; real path uses cfg.
+      provider: (cfg?.provider ?? "anthropic") as "anthropic" | "openai",
+      apiKey: cfg?.apiKey ?? "test-key",
+      model: cfg?.model ?? "test-model",
+      prompt: buildExtractionPrompt(text),
+      signal: controller.signal,
+    };
+    const raw = await (fetcher ?? defaultLlmFetcher)(callArgs);
+    const parsed = tryParseExtractionJson(raw);
+    if (!parsed) {
+      console.log(
+        `[linkedin-import] ai_extraction provider=${cfg?.provider ?? "mock"} status=parse_failed len=${text.length}`,
+      );
+      return { ...heuristic, source_engine: "heuristic", ai_error: "parse_failed" };
+    }
+    // Merge: prefer AI values, fall back to heuristic for any blanks.
+    const job_title = parsed.job_title || heuristic.job_title;
+    const company = parsed.company || heuristic.company;
+    const location = parsed.location || heuristic.location;
+    let job_description = parsed.job_description || heuristic.job_description;
+    if (job_description.length > 12_000) {
+      job_description = `${job_description.slice(0, 12_000).trimEnd()}…`;
+    }
+    const populatedFields = [
+      job_title,
+      company,
+      location,
+      job_description,
+      parsed.technology_context ?? "",
+      parsed.employment_type ?? "",
+      parsed.seniority ?? "",
+    ].filter((v) => v.length > 0).length;
+    console.log(
+      `[linkedin-import] ai_extraction provider=${cfg?.provider ?? "mock"} status=ok len=${text.length} fields=${populatedFields}`,
+    );
+    return {
+      job_title,
+      company,
+      location,
+      job_description,
+      technology_context: parsed.technology_context || "",
+      employment_type: parsed.employment_type || "",
+      seniority: parsed.seniority || "",
+      source_engine: "ai",
+    };
+  } catch (err: any) {
+    const errName = err?.name === "AbortError" ? "timeout" : (err?.message || err?.name || "error").toString().slice(0, 64);
+    console.log(
+      `[linkedin-import] ai_extraction provider=${cfg?.provider ?? "mock"} status=error err=${errName} len=${text.length}`,
+    );
+    return { ...heuristic, source_engine: "heuristic", ai_error: errName };
+  } finally {
+    clearTimeout(timer);
+  }
 }

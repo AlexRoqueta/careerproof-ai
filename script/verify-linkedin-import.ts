@@ -25,7 +25,12 @@
  *
  * Exits non-zero on any failure.
  */
-import { parseLinkedInJobText, stripHtmlToText } from "../server/ai";
+import {
+  parseLinkedInJobText,
+  stripHtmlToText,
+  extractLinkedInJobWithAI,
+  __setLlmFetcherForTests,
+} from "../server/ai";
 import { linkedinImportSchema } from "../shared/schema";
 
 type Case = {
@@ -277,6 +282,187 @@ console.log(`${stripCheck ? "PASS" : "FAIL"}  stripHtmlToText drops tags, script
 if (!stripCheck) {
   failed += 1;
   console.log(`        got: ${JSON.stringify(stripped)}`);
+}
+
+/* =====================================================================
+ * AI extraction path — exercises extractLinkedInJobWithAI with a mock
+ * LLM injected via __setLlmFetcherForTests. The verification environment
+ * MUST NOT make a live LLM call, so we stub the fetcher and assert that:
+ *
+ *   1. When the AI returns valid JSON with extra fields
+ *      (technology_context, employment_type, seniority), those flow
+ *      through to the result and source_engine is "ai".
+ *   2. When the AI errors (network failure / bad status), the result
+ *      falls back to the heuristic parser, source_engine is "heuristic",
+ *      and ai_error is reported.
+ *   3. When the AI returns malformed (non-JSON) output, the result
+ *      falls back to the heuristic parser.
+ *   4. No provider configured (and no mock) -> heuristic-only path.
+ * ===================================================================== */
+
+const AI_PASTED = `Easy Apply
+Save
+Senior Software Engineer
+Acme Robotics Inc.
+San Francisco, CA · Hybrid
+300 applicants
+Posted 2 days ago
+About the job
+We are looking for a Senior Software Engineer to join the platform team. You will design and ship large-scale distributed systems built on Go, Kubernetes, and PostgreSQL, mentor a small team, and partner with product on roadmap decisions.
+
+Responsibilities
+- Build and operate backend services in Go and TypeScript.
+- Lead architecture for a high-throughput ingestion pipeline.
+- Collaborate with product, design, and ML teams.
+
+Requirements
+- 7+ years of backend experience.
+- Strong systems fundamentals.
+- Experience with Kubernetes is a plus.
+
+Show more
+Report this job`;
+
+async function runAiCase(
+  name: string,
+  fetcher: Parameters<typeof __setLlmFetcherForTests>[0],
+  assert: (out: Awaited<ReturnType<typeof extractLinkedInJobWithAI>>) => Array<[string, boolean]>,
+): Promise<void> {
+  __setLlmFetcherForTests(fetcher);
+  try {
+    const out = await extractLinkedInJobWithAI(AI_PASTED, { timeoutMs: 5_000 });
+    const checks = assert(out);
+    const ok = checks.every(([, v]) => v);
+    console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
+    if (!ok) {
+      failed += 1;
+      for (const [label, v] of checks) {
+        if (!v) console.log(`        FAIL  ${label}`);
+      }
+      console.log(`        got: ${JSON.stringify(out).slice(0, 400)}`);
+    }
+  } finally {
+    __setLlmFetcherForTests(null);
+  }
+}
+
+await runAiCase(
+  "AI extraction populates extended fields (technology_context, employment_type, seniority)",
+  async ({ prompt }) => {
+    if (!prompt.includes("PASTED TEXT")) throw new Error("prompt missing PASTED TEXT marker");
+    return JSON.stringify({
+      job_title: "Senior Software Engineer",
+      company: "Acme Robotics",
+      location: "San Francisco, CA (Hybrid)",
+      job_description:
+        "Senior backend engineer role on the platform team. Build and operate backend services in Go and TypeScript. Lead architecture for a high-throughput ingestion pipeline. Collaborate with product, design, and ML teams.",
+      technology_context:
+        "Go, TypeScript, Kubernetes, PostgreSQL, distributed systems. AI assistants are commonly used for code review and documentation.",
+      employment_type: "Full-time",
+      seniority: "Senior",
+    });
+  },
+  (out) => [
+    ["source_engine is 'ai'", out.source_engine === "ai"],
+    ["job_title matches", /Senior Software Engineer/.test(out.job_title)],
+    ["company matches", /Acme Robotics/.test(out.company)],
+    ["location matches", /San Francisco/.test(out.location)],
+    [
+      "job_description contains 'distributed' or 'Go'",
+      /distributed|\bGo\b/.test(out.job_description),
+    ],
+    [
+      "technology_context populated and mentions Kubernetes",
+      Boolean(out.technology_context) && /Kubernetes/i.test(out.technology_context ?? ""),
+    ],
+    ["employment_type populated", out.employment_type === "Full-time"],
+    ["seniority populated", out.seniority === "Senior"],
+    ["no ai_error", !out.ai_error],
+    [
+      "ai populates more fields than heuristic-only",
+      Boolean(out.technology_context) || Boolean(out.employment_type) || Boolean(out.seniority),
+    ],
+  ],
+);
+
+await runAiCase(
+  "AI extraction errors -> falls back to heuristic parser",
+  async () => {
+    throw new Error("anthropic_http_500");
+  },
+  (out) => [
+    ["source_engine is 'heuristic'", out.source_engine === "heuristic"],
+    ["ai_error reported", typeof out.ai_error === "string" && out.ai_error.length > 0],
+    ["heuristic still found a title", /Senior Software Engineer/.test(out.job_title)],
+    ["heuristic still found a description", out.job_description.length > 40],
+    ["technology_context empty on fallback", !out.technology_context],
+  ],
+);
+
+await runAiCase(
+  "AI extraction returns malformed output -> falls back to heuristic parser",
+  async () => "not even close to JSON, just prose from a confused model.",
+  (out) => [
+    ["source_engine is 'heuristic'", out.source_engine === "heuristic"],
+    ["ai_error reports parse_failed", out.ai_error === "parse_failed"],
+    ["heuristic title preserved", /Senior Software Engineer/.test(out.job_title)],
+  ],
+);
+
+// No fetcher and no env keys -> heuristic-only path.
+{
+  __setLlmFetcherForTests(null);
+  const originalKeys = {
+    LLM_API_KEY: process.env.LLM_API_KEY,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  };
+  delete process.env.LLM_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const out = await extractLinkedInJobWithAI(AI_PASTED);
+    const checks: Array<[string, boolean]> = [
+      ["source_engine is 'heuristic'", out.source_engine === "heuristic"],
+      ["no ai_error (no attempt was made)", !out.ai_error],
+      ["heuristic title preserved", /Senior Software Engineer/.test(out.job_title)],
+    ];
+    const ok = checks.every(([, v]) => v);
+    console.log(`${ok ? "PASS" : "FAIL"}  No LLM configured -> heuristic-only path`);
+    if (!ok) {
+      failed += 1;
+      for (const [label, v] of checks) {
+        if (!v) console.log(`        FAIL  ${label}`);
+      }
+    }
+  } finally {
+    for (const [k, v] of Object.entries(originalKeys)) {
+      if (v === undefined) delete (process.env as Record<string, string | undefined>)[k];
+      else (process.env as Record<string, string | undefined>)[k] = v;
+    }
+  }
+}
+
+// Empty input -> heuristic short-circuit returns empty object, source_engine "heuristic".
+{
+  __setLlmFetcherForTests(async () => {
+    throw new Error("should not be called for empty input");
+  });
+  try {
+    const out = await extractLinkedInJobWithAI("");
+    const ok =
+      out.source_engine === "heuristic" &&
+      out.job_title === "" &&
+      out.job_description === "" &&
+      !out.ai_error;
+    console.log(`${ok ? "PASS" : "FAIL"}  Empty input short-circuits before calling the LLM`);
+    if (!ok) {
+      failed += 1;
+      console.log(`        got: ${JSON.stringify(out)}`);
+    }
+  } finally {
+    __setLlmFetcherForTests(null);
+  }
 }
 
 if (failed > 0) {

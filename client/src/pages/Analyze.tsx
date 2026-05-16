@@ -165,8 +165,18 @@ export default function Analyze() {
 
   type LinkedInImportResponse = {
     source: "pasted" | "fetch" | "fetch-failed";
-    parsed: { job_title: string; company: string; location: string; job_description: string };
+    engine?: "ai" | "heuristic";
+    parsed: {
+      job_title: string;
+      company: string;
+      location: string;
+      job_description: string;
+      technology_context?: string;
+      employment_type?: string;
+      seniority?: string;
+    };
     warning?: string;
+    ai_warning?: string;
   };
 
   const linkedinImportMutation = useMutation({
@@ -181,11 +191,17 @@ export default function Analyze() {
     },
     onSuccess: (data) => {
       setLinkedinWarning(data.warning ?? null);
-      const { parsed, source, warning } = data;
+      const { parsed, source, warning, engine } = data;
       if (parsed.job_title) setJobTitle(parsed.job_title);
       if (parsed.job_description) setJobDescription(parsed.job_description);
       if (parsed.company) setLinkedinCompany(parsed.company);
       if (parsed.location) setLinkedinLocation(parsed.location);
+      // AI extraction may also populate the technology_context field that
+      // sits below the job description. Only overwrite when the AI
+      // returned a non-empty value — never clobber a user's edits.
+      if (parsed.technology_context && parsed.technology_context.trim()) {
+        setTechContext(parsed.technology_context);
+      }
 
       if (source === "fetch-failed") {
         toast({
@@ -203,9 +219,12 @@ export default function Analyze() {
         });
         return;
       }
+      const sourceLabel =
+        source === "fetch" ? "Fetched from URL" : "Parsed from pasted text";
+      const engineLabel = engine === "ai" ? " using AI" : "";
       toast({
         title: "LinkedIn job imported",
-        description: source === "fetch" ? "Fetched from URL — review and edit before generating." : "Parsed from pasted text — review and edit before generating.",
+        description: `${sourceLabel}${engineLabel} — review and edit before generating.`,
       });
       scrollToField(fieldToReviewAfterPopulate(parsed), { focus: true });
     },
