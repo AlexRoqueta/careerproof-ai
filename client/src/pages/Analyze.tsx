@@ -72,6 +72,47 @@ export default function Analyze() {
   const prefillAbortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const latestPrefillResumeId = useRef<number | null>(null);
+  const roleDetailsRef = useRef<HTMLDivElement | null>(null);
+
+  /* Smoothly scroll to a field by id and (optionally) focus it. Used
+   * after a programmatic populate — LinkedIn import, resume prefill,
+   * AI auto-fill — so the user lands on the field they need to review
+   * instead of being stuck mid-form. We never call this on each
+   * keystroke (would create scroll loops during manual typing) and
+   * never auto-focus inputs the user is already interacting with. */
+  const scrollToField = (id: string, opts?: { focus?: boolean }) => {
+    if (typeof window === "undefined") return;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      // If the user is already typing in another input, don't yank them
+      // away. Scroll silently to the Role details section header instead.
+      const active = document.activeElement;
+      const userIsTyping =
+        active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      const target = userIsTyping ? roleDetailsRef.current ?? el : el;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (opts?.focus && !userIsTyping && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+        try {
+          el.focus({ preventScroll: true });
+        } catch {
+          /* focus failures are non-fatal */
+        }
+      }
+    });
+  };
+
+  /* Pick the most useful field to land on after a programmatic
+   * populate. Priority: an empty required field the user must fill in
+   * first; otherwise the title (where review usually starts). */
+  const fieldToReviewAfterPopulate = (data: {
+    job_title?: string;
+    job_description?: string;
+  }): string => {
+    if (!data.job_title?.trim()) return "job_title";
+    if (!data.job_description?.trim()) return "job_description";
+    return "job_title";
+  };
 
   const { data: resumes = [] } = useQuery<Resume[]>({ queryKey: ["/api/resumes"] });
 
@@ -117,6 +158,7 @@ export default function Analyze() {
       setJobDescription(data.job_description);
       setTechContext(data.technology_context);
       toast({ title: "Fields auto-filled", description: "Review and refine before generating." });
+      scrollToField("job_description", { focus: true });
     },
     onError: () => toast({ title: "Auto-fill failed", variant: "destructive" }),
   });
@@ -165,6 +207,7 @@ export default function Analyze() {
         title: "LinkedIn job imported",
         description: source === "fetch" ? "Fetched from URL — review and edit before generating." : "Parsed from pasted text — review and edit before generating.",
       });
+      scrollToField(fieldToReviewAfterPopulate(parsed), { focus: true });
     },
     onError: (err: any) => {
       const message = String(err?.message ?? "Unknown error");
@@ -198,6 +241,7 @@ export default function Analyze() {
       setJobDescription(data.job_description);
       setTechContext(data.technology_context);
       toast({ title: "Pre-filled from resume" });
+      scrollToField(fieldToReviewAfterPopulate(data), { focus: true });
     },
     onError: (err: any) => {
       if (err?.name === "AbortError") return;
@@ -310,9 +354,26 @@ export default function Analyze() {
   // Clear result when fields reset
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // When the analysis result lands, scroll the user to the top of the
+  // report so they start reading at the header rather than where the
+  // generate button was. Only fires when an analysis becomes
+  // available (not on every render of the report view).
+  useEffect(() => {
+    if (!resultAnalysis) return;
+    if (typeof window === "undefined") return;
+    requestAnimationFrame(() => {
+      const target = document.getElementById("analysis-report-top");
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    });
+  }, [resultAnalysis?.id]);
+
   if (resultAnalysis) {
     return (
-      <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
+      <div id="analysis-report-top" className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
         <div className="flex items-center justify-between mb-4 gap-2">
           <Button
             variant="ghost"
@@ -555,7 +616,7 @@ export default function Analyze() {
       </Card>
 
       {/* Inputs */}
-      <Card>
+      <Card ref={roleDetailsRef as any}>
         <CardHeader>
           <CardTitle className="text-base">Role details</CardTitle>
           <CardDescription>Be specific — the more context, the better the analysis.</CardDescription>

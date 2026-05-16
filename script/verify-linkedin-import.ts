@@ -84,7 +84,68 @@ ${JSON.stringify({
 </script>
 </head><body>...</body></html>`;
 
+const PROFILE_HEADLINE_AT = `Jane Doe
+Senior Software Engineer at Acme Robotics
+San Francisco Bay Area · 500+ connections
+Contact
+About
+Backend engineer with a decade of experience scaling distributed systems and mentoring teams.
+Experience
+Acme Robotics
+Senior Software Engineer
+Full-time
+Jan 2022 - Present · 3 yrs
+San Francisco, CA · Hybrid
+Built and operate the platform team's ingestion pipeline.
+Northwind Labs
+Software Engineer
+Full-time
+Jul 2018 - Dec 2021 · 3 yrs 6 mos
+Education
+Stanford University
+B.S. Computer Science
+2014 - 2018`;
+
+const PROFILE_DOT_SEPARATOR = `Maria López
+Staff Product Designer · Brightline Studio
+New York, NY
+Experience
+Staff Product Designer
+Brightline Studio · Full-time
+Mar 2023 - Present
+New York, NY
+Senior Product Designer
+Northwind Labs
+Aug 2019 - Feb 2023 · 3 yrs 7 mos`;
+
+const PROFILE_NO_PRESENT = `Sam Lee
+Marketing Manager
+Austin, Texas
+Experience
+Bluewave Coffee
+Marketing Manager
+Full-time
+Feb 2024 - Apr 2026 · 2 yrs 3 mos
+Austin, TX`;
+
 const cases: Case[] = [
+  {
+    name: "LinkedIn profile — headline 'Title at Company' with current role",
+    input: PROFILE_HEADLINE_AT,
+    expect_title: /Senior Software Engineer/,
+    expect_company: /Acme Robotics/,
+  },
+  {
+    name: "LinkedIn profile — '·' separator headline and Experience block",
+    input: PROFILE_DOT_SEPARATOR,
+    expect_title: /Staff Product Designer/,
+    expect_company: /Brightline Studio/,
+  },
+  {
+    name: "LinkedIn profile — latest role even without 'Present' marker",
+    input: PROFILE_NO_PRESENT,
+    expect_title: /Marketing Manager/,
+  },
   {
     name: "typical pasted LinkedIn job",
     input: PASTED_TYPICAL,

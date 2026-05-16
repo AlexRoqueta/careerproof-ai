@@ -519,6 +519,267 @@ function isLinkedInChrome(line: string): boolean {
   return false;
 }
 
+/* Heuristic: does this look like a LinkedIn profile paste (not a job
+ * posting)? Profiles contain section headers like "Experience",
+ * "Education", "About", "Skills", or a "Contact" block, and date ranges
+ * containing "Present". A job-posting paste typically has "Apply",
+ * "applicants", "Posted ... ago", or "About the job". When the profile
+ * signal is stronger than the job-posting signal we route to the
+ * profile parser, which extracts the user's *current/latest* role
+ * rather than treating the whole thing as one job description. */
+function looksLikeLinkedInProfile(lines: string[]): boolean {
+  let profileSignal = 0;
+  let postingSignal = 0;
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (/^experience$/i.test(line)) profileSignal += 3;
+    if (/^education$/i.test(line)) profileSignal += 2;
+    if (/^skills$/i.test(line)) profileSignal += 1;
+    if (/^about$/i.test(line)) profileSignal += 1;
+    if (/^contact$/i.test(line)) profileSignal += 1;
+    if (/^licenses?\s*&?\s*certifications?$/i.test(line)) profileSignal += 1;
+    if (/\bpresent\b/i.test(lower) && /\b(19|20)\d{2}\b/.test(lower)) profileSignal += 2;
+    if (/·\s*(full[- ]time|part[- ]time|contract|self[- ]employed|freelance|internship)\b/i.test(lower))
+      profileSignal += 2;
+    if (/^easy apply$/i.test(line) || /\bapply\b/i.test(line) && line.length < 30) postingSignal += 2;
+    if (/\b\d[\d,]*\s+applicants\b/i.test(lower)) postingSignal += 3;
+    if (/^posted\b.*\bago\b/i.test(lower)) postingSignal += 2;
+    if (/^about the job$/i.test(line)) postingSignal += 3;
+    if (/^job description$/i.test(line)) postingSignal += 2;
+    if (/^report this job$/i.test(line)) postingSignal += 2;
+  }
+  return profileSignal >= 3 && profileSignal > postingSignal;
+}
+
+/* A profile line that names a role+company on the same line. LinkedIn
+ * commonly renders the experience row as one of:
+ *
+ *   "Senior Software Engineer at Acme Robotics"
+ *   "Senior Software Engineer · Acme Robotics"
+ *   "Senior Software Engineer – Acme Robotics"
+ *   "Senior Software Engineer | Acme Robotics"
+ *
+ * Returns { title, company } when the pattern matches, else null. */
+function splitRoleCompanyLine(line: string): { title: string; company: string } | null {
+  const separators = [
+    /^(.+?)\s+at\s+(.+)$/i,
+    /^(.+?)\s+[·•]\s+(.+)$/,
+    /^(.+?)\s+[–—-]\s+(.+)$/,
+    /^(.+?)\s+\|\s+(.+)$/,
+  ];
+  for (const re of separators) {
+    const m = line.match(re);
+    if (!m) continue;
+    const title = m[1].trim();
+    const company = m[2].trim();
+    // Reject when the right side looks like an employment-type tag
+    // ("Full-time", "Part-time") rather than a company name.
+    if (/^(full[- ]time|part[- ]time|contract|self[- ]employed|freelance|internship|permanent)\b/i.test(company))
+      return null;
+    // Reject when the right side looks like a date range.
+    if (/\b(19|20)\d{2}\b/.test(company) && /(present|\d{4})/i.test(company)) return null;
+    if (title.length < 2 || title.length > 140 || company.length < 2 || company.length > 140) return null;
+    if (!/[A-Za-z]/.test(title) || !/[A-Za-z]/.test(company)) return null;
+    return { title, company };
+  }
+  return null;
+}
+
+/* Look for the current / latest role in a LinkedIn profile paste.
+ *
+ * Strategy (in priority order):
+ *   1. The profile headline — the line that sits 1-3 lines below the
+ *      candidate name and *isn't* a section header. LinkedIn headlines
+ *      usually combine the current role and company ("Senior Software
+ *      Engineer at Acme Robotics") and are the most reliable signal for
+ *      "what the user does right now."
+ *   2. The first role under the "Experience" section whose date range
+ *      contains "Present" (current role). If multiple, pick the first
+ *      one encountered (LinkedIn lists most-recent first).
+ *   3. The first role under "Experience" regardless of date — falls
+ *      back to "latest" when "Present" isn't matched (e.g. someone
+ *      between jobs or pasted text dropped the date row).
+ *
+ * Always returns a LinkedInParsedJob; fields are empty when nothing
+ * matches so the caller can degrade gracefully. */
+function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
+  const headerKeywords = new Set([
+    "experience", "education", "about", "skills", "contact", "activity",
+    "featured", "recommendations", "accomplishments", "interests",
+    "licenses & certifications", "licenses and certifications",
+    "certifications", "volunteer experience", "publications",
+    "projects", "languages", "courses", "honors & awards", "honors and awards",
+  ]);
+  const isSectionHeader = (s: string) => headerKeywords.has(s.trim().toLowerCase());
+
+  // 1. Headline: look at the first ~6 non-empty lines for a role-bearing
+  //    line that isn't a section header and isn't a location. The
+  //    candidate's name typically sits at position 0; the headline is
+  //    one of the next few lines.
+  const rolePattern =
+    /\b(engineer|developer|manager|director|designer|analyst|consultant|specialist|lead|founder|owner|ceo|cfo|coo|cio|cto|chief|president|vp|head of|architect|nurse|surgeon|doctor|teacher|professor|attorney|lawyer|paralegal|accountant|bookkeeper|marketer|writer|editor|producer|administrator|coordinator|operator|technician|mechanic|electrician|plumber|chef|cook|sales|representative|associate|executive|partner|principal|scientist|researcher|advisor|strategist|officer|controller|auditor|recruiter|trainer|coach|therapist|counselor|paramedic|firefighter|programmer|copywriter|stylist|barista|cashier|clerk|assistant|intern|apprentice|technologist|pharmacist|dentist|veterinarian|psychologist)\b/i;
+
+  const looksLikeLocation = (s: string) =>
+    /\b(remote|hybrid|on[- ]site|onsite)\b/i.test(s) ||
+    /,\s*[A-Z]{2}\b/.test(s) ||
+    /,\s*(united states|usa|uk|canada|india|germany|france|spain|brazil|mexico|australia|singapore|netherlands|ireland|poland|portugal|italy)\b/i.test(s);
+
+  let headlineTitle = "";
+  let headlineCompany = "";
+  for (let i = 0; i < Math.min(lines.length, 8); i++) {
+    const line = lines[i];
+    if (!line || isSectionHeader(line)) continue;
+    if (looksLikeLocation(line)) continue;
+    if (/^\d+\s+followers?\b/i.test(line)) continue;
+    if (/^\d+\s+connections?\b/i.test(line)) continue;
+    if (!rolePattern.test(line)) continue;
+    // Avoid grabbing the candidate name on line 0 unless it itself
+    // contains a role token (rare, but possible: "Jane Doe, MD").
+    if (i === 0 && !rolePattern.test(line)) continue;
+    const split = splitRoleCompanyLine(line);
+    if (split) {
+      headlineTitle = split.title;
+      headlineCompany = split.company;
+    } else {
+      headlineTitle = line;
+    }
+    break;
+  }
+
+  // 2. Experience section: find the "Experience" header and inspect the
+  //    rows that follow. LinkedIn experience entries vary in shape;
+  //    common patterns include:
+  //
+  //      Acme Robotics
+  //      Senior Software Engineer
+  //      Full-time
+  //      Jan 2022 - Present · 3 yrs
+  //      San Francisco, CA
+  //
+  //    or:
+  //
+  //      Senior Software Engineer
+  //      Acme Robotics · Full-time
+  //      Jan 2022 - Present
+  //
+  //    We look for a row whose date span contains "Present" and harvest
+  //    the title / company from the 1-3 lines preceding it.
+  let experienceTitle = "";
+  let experienceCompany = "";
+  const expIndex = lines.findIndex((l) => /^experience$/i.test(l.trim()));
+  if (expIndex >= 0) {
+    const expSlice = lines.slice(expIndex + 1, expIndex + 80);
+    // Stop at the next section header.
+    const stopAt = expSlice.findIndex((l) => isSectionHeader(l));
+    const expLines = stopAt >= 0 ? expSlice.slice(0, stopAt) : expSlice;
+
+    const datePresentRe = /\b(19|20)\d{2}\b.*\b(present|current|now)\b/i;
+    const dateRangeRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\b|\b(19|20)\d{2}\s*[-–—]\s*(19|20)\d{2}\b/i;
+
+    // Pass 1: try to find a "Present" row and lift the role from the
+    // 1-3 lines above it.
+    let currentRowIdx = expLines.findIndex((l) => datePresentRe.test(l));
+    let currentFound = currentRowIdx >= 0;
+    // Pass 2: fall back to the first row whose date range looks like a
+    // job employment span (latest, since LinkedIn lists newest-first).
+    if (!currentFound) currentRowIdx = expLines.findIndex((l) => dateRangeRe.test(l));
+
+    if (currentRowIdx >= 0) {
+      // Inspect the 3 lines immediately above the date row.
+      const candidates: string[] = [];
+      for (let i = Math.max(0, currentRowIdx - 3); i < currentRowIdx; i++) {
+        const l = expLines[i].trim();
+        if (!l) continue;
+        if (/^(full[- ]time|part[- ]time|contract|self[- ]employed|freelance|internship|permanent)\b/i.test(l))
+          continue;
+        if (looksLikeLocation(l)) continue;
+        candidates.push(l);
+      }
+      // Heuristic: when there's a single-line "Title at Company"
+      // pattern, split it. Otherwise treat the last candidate as the
+      // title and the one before as the company (LinkedIn's "title
+      // then company" rendering). If only one candidate, that's the
+      // title.
+      const splitLast = candidates.length
+        ? splitRoleCompanyLine(candidates[candidates.length - 1])
+        : null;
+      if (splitLast) {
+        experienceTitle = splitLast.title;
+        experienceCompany = splitLast.company;
+      } else if (candidates.length >= 2) {
+        // Detect "Company · Full-time" pattern on the second-to-last
+        // candidate (company sits under the title in this layout).
+        const last = candidates[candidates.length - 1];
+        const prev = candidates[candidates.length - 2];
+        const companyDotType = prev.match(/^(.+?)\s+[·•]\s+(full[- ]time|part[- ]time|contract|self[- ]employed|freelance|internship|permanent)\b/i);
+        if (rolePattern.test(last) && !rolePattern.test(prev)) {
+          experienceTitle = last;
+          experienceCompany = companyDotType ? companyDotType[1].trim() : prev;
+        } else if (rolePattern.test(prev) && !rolePattern.test(last)) {
+          experienceTitle = prev;
+          experienceCompany = last;
+        } else {
+          experienceTitle = last;
+          experienceCompany = companyDotType ? companyDotType[1].trim() : prev;
+        }
+      } else if (candidates.length === 1) {
+        const split = splitRoleCompanyLine(candidates[0]);
+        if (split) {
+          experienceTitle = split.title;
+          experienceCompany = split.company;
+        } else {
+          experienceTitle = candidates[0];
+        }
+      }
+    }
+  }
+
+  // Prefer headline when it carries a role; otherwise the experience-
+  // section role; final fallback empty.
+  const job_title = headlineTitle || experienceTitle || "";
+  const company = headlineCompany || experienceCompany || "";
+
+  // For the description, prefer the "About" section text when present
+  // (it's the user's own summary), else stitch together the headline
+  // and current-role line as a short context blurb so the analysis has
+  // something to work with.
+  let description = "";
+  const aboutIdx = lines.findIndex((l) => /^about$/i.test(l.trim()));
+  if (aboutIdx >= 0) {
+    const after = lines.slice(aboutIdx + 1);
+    const stopAt = after.findIndex((l) => isSectionHeader(l));
+    const aboutLines = stopAt >= 0 ? after.slice(0, stopAt) : after.slice(0, 40);
+    description = aboutLines.join("\n").trim();
+  }
+  if (!description) {
+    const parts: string[] = [];
+    if (headlineTitle) parts.push(headlineTitle + (headlineCompany ? ` at ${headlineCompany}` : ""));
+    if (experienceTitle && experienceTitle !== headlineTitle)
+      parts.push(`Current role: ${experienceTitle}${experienceCompany ? ` at ${experienceCompany}` : ""}`);
+    description = parts.join("\n").trim();
+  }
+
+  // Location: a line near the top that matches the location pattern
+  // and isn't already the company.
+  let location = "";
+  for (let i = 0; i < Math.min(lines.length, 12); i++) {
+    const line = lines[i];
+    if (!line || isSectionHeader(line)) continue;
+    if (line === company) continue;
+    if (looksLikeLocation(line) && !/at\s+/i.test(line)) {
+      location = line;
+      break;
+    }
+  }
+
+  return {
+    job_title: toTitleCase(job_title),
+    company,
+    location,
+    job_description: description,
+  };
+}
+
 /* Public: parse pasted LinkedIn job text (or HTML-stripped fetched
  * content) into structured fields. Best-effort and tolerant — see the
  * top-of-section doc comment for the contract. */
@@ -538,6 +799,15 @@ export function parseLinkedInJobText(rawInput: string): LinkedInParsedJob {
     .split(/\n+/)
     .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
+
+  // Route LinkedIn-profile pastes to the profile parser; otherwise
+  // continue with the existing job-posting parser below.
+  if (looksLikeLinkedInProfile(lines)) {
+    const profile = parseLinkedInProfileText(lines);
+    if (profile.job_title || profile.job_description) {
+      return profile;
+    }
+  }
 
   // Drop obvious chrome lines from the front of the body for header
   // detection, but keep them out of the description either way.
