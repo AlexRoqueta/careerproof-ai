@@ -694,9 +694,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await extractLinkedInJobWithAI(pasted);
       // Heuristic: did the paste look like a logged-out preview only?
       // We flag a soft UI warning if no real Experience block was found
-      // and the description looks too thin to be useful.
+      // and the description looks too thin to be useful. Also surface a
+      // warning when the description was discarded by the quality gate
+      // (description blank or synth-only and clearly insufficient).
+      const descLen = (result.job_description ?? "").length;
+      const isSynthOnly = /^LinkedIn profile summary \/ current role/i.test(
+        result.job_description ?? "",
+      );
       const previewWarning = looksLikeLoggedOutPreview(pasted, result)
-        ? "This looks like LinkedIn's logged-out preview — open the full profile, expand About and Experience, then copy again for a richer import. We still extracted what we could."
+        ? "Limited LinkedIn profile content detected. Paste the About and current Experience sections for a richer import."
+        : descLen === 0
+        ? "Limited LinkedIn profile content detected. We couldn't find a usable Job Description — paste the About and current Experience sections from your LinkedIn profile for a richer import."
+        : isSynthOnly && descLen < 400
+        ? "Limited LinkedIn profile content detected. Paste the About and current Experience sections for a richer import."
         : undefined;
       return res.json({
         source: "pasted",

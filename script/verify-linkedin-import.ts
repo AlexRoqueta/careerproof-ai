@@ -34,6 +34,8 @@ import {
   sanitizeLinkedInShortField,
   finalizeLinkedInResult,
   looksLikeLoggedOutPreview,
+  descriptionPassesQualityGate,
+  extractTechnologyContextFromRawText,
   __setLlmFetcherForTests,
 } from "../server/ai";
 import { linkedinImportSchema } from "../shared/schema";
@@ -635,7 +637,13 @@ await runAiCase(
     ["ai_error reported", typeof out.ai_error === "string" && out.ai_error.length > 0],
     ["heuristic still found a title", /Senior Software Engineer/.test(out.job_title)],
     ["heuristic still found a description", out.job_description.length > 40],
-    ["technology_context empty on fallback", !out.technology_context],
+    // technology_context is now mined from the raw cleaned text as a
+    // safety net, so on heuristic fallback it should contain whatever
+    // tech vocab the paste mentioned (here: Go, TypeScript, Kubernetes).
+    [
+      "technology_context populated by raw-text safety net",
+      typeof out.technology_context === "string" && out.technology_context.length > 0,
+    ],
   ],
 );
 
@@ -870,6 +878,399 @@ await runAiCase(
   const ok = preview === true;
   console.log(`${ok ? "PASS" : "FAIL"}  looksLikeLoggedOutPreview detects the user-reported preview paste`);
   if (!ok) failed += 1;
+}
+
+/* =====================================================================
+ * Footer / language-selector regression (2026-05-16 user report).
+ *
+ * The user reported that Job Description was filled with LinkedIn footer
+ * + language-selector residue, e.g. "Accessibility", "Your California
+ * Privacy Choices", "Copyright Policy", "Brand Policy", "Guest Controls",
+ * language names ("العربية (Arabic)", "Deutsch", "Español", ...), and
+ * Tailwind class fragments like py-4 / rounded-md.
+ *
+ * The parser must:
+ *   1. Strip all of this chrome from any field.
+ *   2. Either return an empty description or a short safe synthesised
+ *      sentence; NEVER let footer/legal/language-selector noise become
+ *      the Job Description.
+ *   3. Still extract a rich technology_context when About / Specialties
+ *      content is present anywhere in the paste.
+ * ===================================================================== */
+
+const PROFILE_FOOTER_LANGUAGE_SELECTOR = `LinkedIn profile summary / current role
+About:
+Accessibility
+Your California Privacy Choices
+Copyright Policy
+Brand Policy
+Guest Controls
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ar_AE" data-locale="ar_AE" role="menuitem" lang="ar_AE">
+العربية (Arabic)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-bn_IN" data-locale="bn_IN" role="menuitem" lang="bn_IN">
+বাংলা (Bangla)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-cs_CZ" data-locale="cs_CZ" role="menuitem" lang="cs_CZ">
+čeština (Czech)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-da_DK" data-locale="da_DK" role="menuitem" lang="da_DK">
+Dansk (Danish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-de_DE" data-locale="de_DE" role="menuitem" lang="de_DE">
+Deutsch (German)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-el_GR" data-locale="el_GR" role="menuitem" lang="el_GR">
+ελληνικά (Greek)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-en_US" data-locale="en_US" role="menuitem" lang="en_US">
+English (English)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-es_ES" data-locale="es_ES" role="menuitem" lang="es_ES">
+Español (Spanish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-fa_IR" data-locale="fa_IR" role="menuitem" lang="fa_IR">
+فارسی (Persian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-fi_FI" data-locale="fi_FI" role="menuitem" lang="fi_FI">
+Suomi (Finnish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-fr_FR" data-locale="fr_FR" role="menuitem" lang="fr_FR">
+Français (French)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-hi_IN" data-locale="hi_IN" role="menuitem" lang="hi_IN">
+हिंदी (Hindi)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-hu_HU" data-locale="hu_HU" role="menuitem" lang="hu_HU">
+Magyar (Hungarian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-id_ID" data-locale="id_ID" role="menuitem" lang="id_ID">
+Bahasa Indonesia (Indonesian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-it_IT" data-locale="it_IT" role="menuitem" lang="it_IT">
+Italiano (Italian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-iw_IL" data-locale="iw_IL" role="menuitem" lang="iw_IL">
+עברית (Hebrew)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ja_JP" data-locale="ja_JP" role="menuitem" lang="ja_JP">
+日本語 (Japanese)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ko_KR" data-locale="ko_KR" role="menuitem" lang="ko_KR">
+한국어 (Korean)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-mr_IN" data-locale="mr_IN" role="menuitem" lang="mr_IN">
+मराठी (Marathi)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ms_MY" data-locale="ms_MY" role="menuitem" lang="ms_MY">
+Bahasa Malaysia (Malay)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-nl_NL" data-locale="nl_NL" role="menuitem" lang="nl_NL">
+Nederlands (Dutch)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-no_NO" data-locale="no_NO" role="menuitem" lang="no_NO">
+Norsk (Norwegian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-pa_IN" data-locale="pa_IN" role="menuitem" lang="pa_IN">
+ਪੰਜਾਬੀ (Punjabi)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-pl_PL" data-locale="pl_PL" role="menuitem" lang="pl_PL">
+Polski (Polish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-pt_BR" data-locale="pt_BR" role="menuitem" lang="pt_BR">
+Português (Portuguese)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ro_RO" data-locale="ro_RO" role="menuitem" lang="ro_RO">
+Română (Romanian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ru_RU" data-locale="ru_RU" role="menuitem" lang="ru_RU">
+Русский (Russian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-sv_SE" data-locale="sv_SE" role="menuitem" lang="sv_SE">
+Svenska (Swedish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-te_IN" data-locale="te_IN" role="menuitem" lang="te_IN">
+తెలుగు (Telugu)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-th_TH" data-locale="th_TH" role="menuitem" lang="th_TH">
+ภาษาไทย (Thai)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-tl_PH" data-locale="tl_PH" role="menuitem" lang="tl_PH">
+Tagalog (Tagalog)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-tr_TR" data-locale="tr_TR" role="menuitem" lang="tr_TR">
+Türkçe (Turkish)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-uk_UA" data-locale="uk_UA" role="menuitem" lang="uk_UA">
+українська (Ukrainian)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-vi_VN" data-locale="vi_VN" role="menuitem" lang="vi_VN">
+Tiếng Việt (Vietnamese)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-zh_CN" data-locale="zh_CN" role="menuitem" lang="zh_CN">
+简体中文 (Chinese (Simplified))
+language-selector__link !font-regular" data-tracking-control-name="language-selector-zh_TW" data-locale="zh_TW" role="menuitem" lang="zh_TW">
+正體中文 (Chinese (Traditional))
+py-4
+" aria-hidden="true">
+rounded-md">
+Alex can help you find your next opportunity`;
+
+/* The same kind of paste, but with real About / Specialties / current
+ * Experience content interleaved with the footer / language-selector
+ * noise. The parser must keep the tech context AND scrub all the chrome
+ * from the description. */
+const PROFILE_FOOTER_PLUS_REAL_ABOUT = `Alex Roqueta
+Senior Program Manager / Technical Director
+Ladera Ranch, California, United States · Contact info
+
+About
+Senior Technical Program Manager and Director with 15+ years driving large-scale technical programs across IoT, Cloud, CRM, and Big Data platforms. I partner with cross-functional teams to deliver new product development end-to-end. Comfortable in Azure, SQL, SSRS, SAP Crystal Reports, Jira, and Confluence-driven Agile environments. Passionate about customer experience and predictive analytics.
+
+Specialties
+Technical Program Management, IoT, CRM, Cloud, New Product Development, Big Data, Predictive Analytics, BI, Customer Experience, Product Development, Business Systems, Program Management
+
+Experience
+Sr. Program Manager
+Smart Staffing Solutions · Contract
+Jan 2020 - Present · 6 yrs 4 mos
+Corona, CA
+- Lead cross-functional technical programs across IoT and Cloud platforms.
+- Manage roadmaps in Jira and Confluence, partnering with engineering, product, and customer success.
+- Built BI dashboards in SSRS and SAP Crystal Reports for executive reporting.
+- Drove predictive analytics initiatives using Azure ML and SQL.
+
+Accessibility
+Your California Privacy Choices
+Copyright Policy
+Brand Policy
+Guest Controls
+language-selector__link !font-regular" data-tracking-control-name="language-selector-ar_AE" data-locale="ar_AE" role="menuitem" lang="ar_AE">
+العربية (Arabic)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-de_DE" data-locale="de_DE" role="menuitem" lang="de_DE">
+Deutsch (German)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-es_ES" data-locale="es_ES" role="menuitem" lang="es_ES">
+Español (Spanish)
+py-4
+" aria-hidden="true">
+rounded-md">
+Alex can help you find your next opportunity`;
+
+/* Title + company only — no real About / Experience block. The parser
+ * should still allow title/company to fill, but description must remain
+ * blank or a safe synthesised one-liner; never the footer noise. */
+const PROFILE_FOOTER_TITLE_COMPANY_ONLY = `Alex Roqueta
+Sr. Program Manager
+Smart Staffing Solutions
+
+Accessibility
+Your California Privacy Choices
+Copyright Policy
+Brand Policy
+Guest Controls
+language-selector__link !font-regular" data-tracking-control-name="language-selector-fr_FR" data-locale="fr_FR" role="menuitem" lang="fr_FR">
+Français (French)
+language-selector__link !font-regular" data-tracking-control-name="language-selector-de_DE" data-locale="de_DE" role="menuitem" lang="de_DE">
+Deutsch (German)
+py-4
+" aria-hidden="true">
+rounded-md">
+Alex can help you find your next opportunity`;
+
+const FOOTER_BANNED_FRAGMENTS = [
+  "Accessibility",
+  "Your California Privacy Choices",
+  "California Privacy",
+  "Copyright Policy",
+  "Brand Policy",
+  "Guest Controls",
+  "language-selector",
+  "data-tracking-control-name",
+  "data-locale",
+  'role="menuitem"',
+  "العربية",
+  "Arabic",
+  "Deutsch",
+  "Español",
+  "Français",
+  "py-4",
+  "rounded-md",
+  "aria-hidden",
+  "Alex can help you find your next opportunity",
+];
+
+function assertNoFooterFragments(label: string, blob: string): void {
+  for (const banned of FOOTER_BANNED_FRAGMENTS) {
+    const ok = !blob.toLowerCase().includes(banned.toLowerCase());
+    console.log(`${ok ? "PASS" : "FAIL"}  ${label} — no "${banned}"`);
+    if (!ok) {
+      failed += 1;
+    }
+  }
+}
+
+{
+  // Case 1: footer/language-selector-only paste. Description must NOT
+  // contain any chrome, and should either be blank or a clean synth.
+  const out = parseLinkedInJobText(PROFILE_FOOTER_LANGUAGE_SELECTOR);
+  const blob = [
+    out.job_title,
+    out.company,
+    out.location,
+    out.job_description,
+    out.technology_context ?? "",
+  ].join("\n");
+  assertNoFooterFragments(
+    "footer/language-selector-only paste — fields",
+    blob,
+  );
+  const descOk =
+    out.job_description === "" ||
+    /^LinkedIn profile summary \/ current role/i.test(out.job_description);
+  console.log(
+    `${descOk ? "PASS" : "FAIL"}  footer/language-selector-only paste — description is blank or safe synth`,
+  );
+  if (!descOk) {
+    failed += 1;
+    console.log(`        got desc: ${JSON.stringify(out.job_description.slice(0, 280))}`);
+  }
+  const gate = descriptionPassesQualityGate(out.job_description);
+  console.log(
+    `${!gate ? "PASS" : "FAIL"}  footer/language-selector-only paste — quality gate REJECTS the description`,
+  );
+  if (gate) failed += 1;
+}
+
+{
+  // Case 2: footer noise + real About / Specialties / current Experience.
+  // Description must be clean (no chrome) AND technology_context must
+  // include the rich set of terms.
+  const out = parseLinkedInJobText(PROFILE_FOOTER_PLUS_REAL_ABOUT);
+  const blob = [
+    out.job_title,
+    out.company,
+    out.location,
+    out.job_description,
+    out.technology_context ?? "",
+  ].join("\n");
+  assertNoFooterFragments(
+    "footer + real About — fields",
+    blob,
+  );
+  const titleOk = /(Sr\.? Program Manager|Senior Program Manager|Senior Technical Program Manager)/i.test(
+    out.job_title,
+  );
+  console.log(`${titleOk ? "PASS" : "FAIL"}  footer + real About — title populated`);
+  if (!titleOk) failed += 1;
+  const companyOk = /Smart Staffing Solutions/i.test(out.company);
+  console.log(`${companyOk ? "PASS" : "FAIL"}  footer + real About — company populated`);
+  if (!companyOk) failed += 1;
+  const tech = (out.technology_context ?? "");
+  const techExpected = [
+    "Technical Program Management",
+    "IoT",
+    "CRM",
+    "Cloud",
+    "Azure",
+    "Big Data",
+    "Predictive Analytics",
+    "BI",
+    "SQL",
+    "Jira",
+    "Confluence",
+    "Customer Experience",
+    "Business Systems",
+    "Program Management",
+    "Product Development",
+  ];
+  let techHits = 0;
+  for (const t of techExpected) {
+    if (tech.toLowerCase().includes(t.toLowerCase())) techHits += 1;
+  }
+  const techRichEnough = techHits >= 8;
+  console.log(
+    `${techRichEnough ? "PASS" : "FAIL"}  footer + real About — technology_context is rich (${techHits}/${techExpected.length})`,
+  );
+  if (!techRichEnough) {
+    failed += 1;
+    console.log(`        got tech: ${JSON.stringify(tech.slice(0, 320))}`);
+  }
+}
+
+{
+  // Case 3: title + company only — description must NOT be footer noise.
+  // Use the full route pipeline (extractLinkedInJobWithAI → finalize)
+  // since that's the user-facing path the quality gate runs on.
+  __setLlmFetcherForTests(null);
+  // Drop any provider env keys so we exercise the heuristic-only path.
+  const originalKeys = {
+    LLM_API_KEY: process.env.LLM_API_KEY,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  };
+  delete process.env.LLM_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  let out: Awaited<ReturnType<typeof extractLinkedInJobWithAI>>;
+  try {
+    out = await extractLinkedInJobWithAI(PROFILE_FOOTER_TITLE_COMPANY_ONLY);
+  } finally {
+    for (const [k, v] of Object.entries(originalKeys)) {
+      if (v === undefined) delete (process.env as Record<string, string | undefined>)[k];
+      else (process.env as Record<string, string | undefined>)[k] = v;
+    }
+  }
+  const blob = [
+    out.job_title,
+    out.company,
+    out.location,
+    out.job_description,
+    out.technology_context ?? "",
+  ].join("\n");
+  assertNoFooterFragments(
+    "title+company only — fields",
+    blob,
+  );
+  // Description must be blank or a safe synth header line — never the
+  // footer noise.
+  const descOk =
+    out.job_description === "" ||
+    /^LinkedIn profile summary \/ current role/i.test(out.job_description);
+  console.log(
+    `${descOk ? "PASS" : "FAIL"}  title+company only — description is blank or safe synth`,
+  );
+  if (!descOk) {
+    failed += 1;
+    console.log(`        got desc: ${JSON.stringify(out.job_description.slice(0, 280))}`);
+  }
+  // Title and company may flow through, OR be blank — but if filled,
+  // they must not be footer fragments (covered by the no-fragments
+  // assertions above).
+  const titleOk =
+    out.job_title === "" ||
+    /(Sr\.? Program Manager|Senior Program Manager|Alex Roqueta)/i.test(out.job_title);
+  console.log(`${titleOk ? "PASS" : "FAIL"}  title+company only — title is blank or clean`);
+  if (!titleOk) failed += 1;
+  const companyOk =
+    out.company === "" ||
+    /(Smart Staffing Solutions|Sr\.? Program Manager)/i.test(out.company);
+  console.log(`${companyOk ? "PASS" : "FAIL"}  title+company only — company is blank or clean`);
+  if (!companyOk) failed += 1;
+}
+
+{
+  // Quality gate unit tests.
+  const gateCases: Array<[string, string, boolean]> = [
+    [
+      "real About paragraph passes the gate",
+      "About the role: Senior Program Manager responsible for cross-functional technical programs across IoT and Cloud platforms. Drives roadmap delivery with engineering, product, and customer success partners.",
+      true,
+    ],
+    [
+      "footer-only blob fails the gate",
+      "Accessibility\nYour California Privacy Choices\nCopyright Policy\nBrand Policy\nGuest Controls\nlanguage-selector\nDeutsch\nEspañol\npy-4\nrounded-md",
+      false,
+    ],
+    [
+      "empty input fails the gate",
+      "",
+      false,
+    ],
+    [
+      "short two-word blob fails the gate",
+      "Senior Engineer",
+      false,
+    ],
+  ];
+  for (const [name, input, expected] of gateCases) {
+    const got = descriptionPassesQualityGate(input);
+    const ok = got === expected;
+    console.log(`${ok ? "PASS" : "FAIL"}  quality gate — ${name}`);
+    if (!ok) {
+      failed += 1;
+      console.log(`        expected ${expected}, got ${got}`);
+    }
+  }
+}
+
+{
+  // extractTechnologyContextFromRawText surfaces tech vocabulary even
+  // when the description is going to be discarded by the gate.
+  const tc = extractTechnologyContextFromRawText(
+    "About: I drive IoT, Cloud, CRM, and Big Data programs in Azure with Jira and Confluence. Predictive Analytics. SAP Crystal Reports. Technical Program Management.",
+  );
+  const ok = /IoT/i.test(tc) && /Cloud/i.test(tc) && /Azure/i.test(tc) && /Jira/i.test(tc) && /Technical Program Management/i.test(tc);
+  console.log(`${ok ? "PASS" : "FAIL"}  extractTechnologyContextFromRawText finds tech in a free-form blurb`);
+  if (!ok) {
+    failed += 1;
+    console.log(`        got: ${JSON.stringify(tc)}`);
+  }
 }
 
 if (failed > 0) {

@@ -545,7 +545,7 @@ export default function Analyze() {
             <Alert variant="default" data-testid="alert-linkedin-warning">
               <AlertTriangle className="w-4 h-4" />
               <AlertTitle>
-                {/preview/i.test(linkedinWarning)
+                {/(preview|limited\s+linkedin)/i.test(linkedinWarning)
                   ? "Limited LinkedIn content detected"
                   : "Couldn't fetch from LinkedIn"}
               </AlertTitle>

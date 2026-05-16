@@ -1147,8 +1147,167 @@ const LINKEDIN_LOGIN_CHROME_LINES = new Set(
     "continue",
     "english (english)",
     "language",
+    // Footer / legal / language-selector residue (2026-05 user report).
+    "accessibility",
+    "your california privacy choices",
+    "california privacy choices",
+    "copyright policy",
+    "brand policy",
+    "guest controls",
+    "manage your account and privacy",
+    "go to your settings",
+    "select language",
+    "about",
+    "ad choices",
+    "advertising",
+    "sales solutions",
+    "mobile",
+    "small business",
+    "safety center",
+    "talent solutions",
+    "marketing solutions",
+    "learning",
+    "careers",
+    "press",
+    "help center",
+    "help",
   ].map((s) => s.toLowerCase()),
 );
+
+/* LinkedIn's footer renders a language selector with the language name in
+ * its native script. We drop these tokens entirely when they appear as
+ * standalone lines — they never belong in a job description. The list is
+ * conservative: it only matches lines that are JUST a language name (and
+ * optionally a parenthetical English translation), so prose like "I speak
+ * fluent French" survives. */
+const LINKEDIN_LANGUAGE_NAMES = new Set(
+  [
+    "العربية",
+    "العربية (arabic)",
+    "বাংলা",
+    "বাংলা (bangla)",
+    "čeština",
+    "čeština (czech)",
+    "dansk",
+    "dansk (danish)",
+    "deutsch",
+    "deutsch (german)",
+    "ελληνικά",
+    "ελληνικά (greek)",
+    "english",
+    "english (english)",
+    "español",
+    "español (spanish)",
+    "فارسی",
+    "فارسی (persian)",
+    "suomi",
+    "suomi (finnish)",
+    "français",
+    "français (french)",
+    "हिंदी",
+    "हिंदी (hindi)",
+    "magyar",
+    "magyar (hungarian)",
+    "bahasa indonesia",
+    "bahasa indonesia (indonesian)",
+    "italiano",
+    "italiano (italian)",
+    "עברית",
+    "עברית (hebrew)",
+    "日本語",
+    "日本語 (japanese)",
+    "한국어",
+    "한국어 (korean)",
+    "मराठी",
+    "मराठी (marathi)",
+    "bahasa malaysia",
+    "bahasa malaysia (malay)",
+    "nederlands",
+    "nederlands (dutch)",
+    "norsk",
+    "norsk (norwegian)",
+    "ਪੰਜਾਬੀ",
+    "ਪੰਜਾਬੀ (punjabi)",
+    "polski",
+    "polski (polish)",
+    "português",
+    "português (portuguese)",
+    "română",
+    "română (romanian)",
+    "русский",
+    "русский (russian)",
+    "svenska",
+    "svenska (swedish)",
+    "తెలుగు",
+    "తెలుగు (telugu)",
+    "ภาษาไทย",
+    "ภาษาไทย (thai)",
+    "tagalog",
+    "tagalog (tagalog)",
+    "türkçe",
+    "türkçe (turkish)",
+    "українська",
+    "українська (ukrainian)",
+    "tiếng việt",
+    "tiếng việt (vietnamese)",
+    "简体中文",
+    "简体中文 (chinese (simplified))",
+    "正體中文",
+    "正體中文 (chinese (traditional))",
+    "中文 (简体)",
+    "中文 (繁體)",
+    "arabic",
+    "bangla",
+    "czech",
+    "danish",
+    "german",
+    "greek",
+    "spanish",
+    "persian",
+    "finnish",
+    "french",
+    "hindi",
+    "hungarian",
+    "indonesian",
+    "italian",
+    "hebrew",
+    "japanese",
+    "korean",
+    "marathi",
+    "malay",
+    "dutch",
+    "norwegian",
+    "punjabi",
+    "polish",
+    "portuguese",
+    "romanian",
+    "russian",
+    "swedish",
+    "telugu",
+    "thai",
+    "tagalog",
+    "turkish",
+    "ukrainian",
+    "vietnamese",
+    "chinese (simplified)",
+    "chinese (traditional)",
+    "chinese simplified",
+    "chinese traditional",
+  ].map((s) => s.toLowerCase()),
+);
+
+function isLanguageSelectorLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  // Standalone short line whose entire content is a language name.
+  if (trimmed.length > 60) return false;
+  const lower = trimmed.toLowerCase();
+  if (LINKEDIN_LANGUAGE_NAMES.has(lower)) return true;
+  // Also accept the "Native (English)" form with extra trailing punctuation.
+  const stripped = lower.replace(/[.,;:!?]+$/, "").trim();
+  if (LINKEDIN_LANGUAGE_NAMES.has(stripped)) return true;
+  return false;
+}
 
 /* Does this line look like CSS/JS/markup residue (a class name fragment,
  * a CSS rule, an inline-style snippet, an image-link line, a raw URL
@@ -1168,7 +1327,15 @@ function looksLikeMarkupResidue(line: string): boolean {
   }
   // CSS rules: "color: #fff;" or ".class { color: red; }"
   if (/^[.#][a-zA-Z][\w\-]*\s*\{/.test(t)) return true;
-  if (/^[a-zA-Z\-]+\s*:\s*[^:;]+;?\s*$/.test(t) && /[#{}();]|px|rem|em/.test(t)) return true;
+  // CSS declarations: "color: #fff;" / "padding: 8px;" — must be short and
+  // look CSS-like. Prose lines like "About: I drive IoT..." would otherwise
+  // false-positive because "Management" contains "em".
+  if (
+    t.length <= 80 &&
+    /^[a-zA-Z\-]+\s*:\s*[^:;]+;\s*$/.test(t) &&
+    /[#{}();]|\b\d+(?:px|rem|em)\b/.test(t)
+  )
+    return true;
   // CSS-class-only lines ("artdeco-button artdeco-button--secondary")
   if (/^[a-z][a-z0-9\-]*(\s+[a-z][a-z0-9\-]*){1,}$/.test(t) && /\-\-|artdeco|linkedin|li-/.test(t)) return true;
   // Tailwind / LinkedIn JIT class fragments: lines that include any of
@@ -1238,6 +1405,33 @@ function isLinkedInPageChrome(line: string): boolean {
   if (/^see\s+(more|all)\s+(experience|profile)\b/i.test(trimmed)) return true;
   // "By clicking ... agree to ..." paragraph variants.
   if (/^by clicking\b/i.test(trimmed) && /agree to/i.test(trimmed)) return true;
+  // Footer / legal / language-selector residue (2026-05 user report).
+  if (/^(accessibility|your california privacy choices|california privacy choices|copyright policy|brand policy|guest controls|ad choices|sales solutions|talent solutions|marketing solutions|safety center|help center|small business)\s*[.,]?\s*$/i.test(trimmed))
+    return true;
+  // HTML attribute residue: data-tracking-control-name="...", data-locale="...",
+  // role="menuitem", lang="...", aria-hidden="..." that slipped through.
+  if (/\bdata-tracking-control-name\s*=/i.test(trimmed)) return true;
+  if (/\bdata-locale\s*=/i.test(trimmed)) return true;
+  if (/\brole\s*=\s*["']menuitem["']/i.test(trimmed)) return true;
+  if (/\blang\s*=\s*["'][a-z][a-z](?:[-_][a-zA-Z]+)?["']/i.test(trimmed)) return true;
+  if (/\baria-hidden\s*=\s*["']?(true|false)["']?/i.test(trimmed)) return true;
+  // CSS-class fragment trailing-attribute lines like:  `language-selector__link !font-regular" ...>`
+  if (/language-selector(?:__|-)/i.test(trimmed)) return true;
+  // Lone classy fragments: `py-4`, `rounded-md`, `font-regular`, etc. as their entire content.
+  if (/^[a-z]{1,4}-\[?\d/.test(trimmed) && trimmed.length < 28) return true;
+  if (/^(py|px|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|gap|w|h|min-w|min-h|max-w|max-h)-\d+\b/.test(trimmed) && trimmed.length < 28) return true;
+  if (/^(rounded(-(sm|md|lg|xl|full))?|shadow(-(sm|md|lg|xl))?|border(-\d+)?|truncate|underline|font-(?:regular|medium|semibold|bold|normal)|leading-(?:regular|tight|snug|relaxed|loose|none)|tracking-(?:tight|normal|wide))$/i.test(trimmed))
+    return true;
+  // Trailing class-attribute leftovers ending with quotes/brackets such as
+  // `py-4`, `rounded-md` followed by `"` or `>`.
+  if (/^[a-z0-9\-]+\s*["']?\s*>?\s*$/i.test(trimmed) && /\-/.test(trimmed) && trimmed.length < 28 && /^[a-z]/.test(trimmed))
+    return true;
+  // Language-selector lines: an entire line that is just a language name.
+  if (isLanguageSelectorLine(trimmed)) return true;
+  // Generic "can help you find your next opportunity" footer CTAs LinkedIn
+  // sometimes injects (2026-05 user report).
+  if (/can help you find your next opportunity/i.test(trimmed)) return true;
+  if (/^get the latest jobs and industry news\b/i.test(trimmed)) return true;
   // Markup residue check.
   if (looksLikeMarkupResidue(line)) return true;
   return false;
@@ -1791,6 +1985,34 @@ const FORBIDDEN_DESC_LINE_PATTERNS: RegExp[] = [
   /^see\s+their\s+title,?\s+tenure\s+and\s+more\b/i,
   /^new to linkedin\??\s*(join now)?\s*$/i,
   /^experience\s*&\s*education\s*$/i,
+  // Footer / legal / language-selector residue (2026-05 user report).
+  /^accessibility\s*[.,]?\s*$/i,
+  /^your california privacy choices\b/i,
+  /^california privacy choices\b/i,
+  /^copyright policy\b/i,
+  /^brand policy\b/i,
+  /^guest controls\b/i,
+  /^ad choices\b/i,
+  /^sales solutions\b/i,
+  /^talent solutions\b/i,
+  /^marketing solutions\b/i,
+  /^safety center\b/i,
+  /^help center\b/i,
+  /^small business\b/i,
+  /\bdata-tracking-control-name\s*=/i,
+  /\bdata-locale\s*=/i,
+  /\brole\s*=\s*["']menuitem["']/i,
+  /\blang\s*=\s*["'][a-z][a-z](?:[-_][a-zA-Z]+)?["']/i,
+  /\baria-hidden\s*=/i,
+  /language-selector(?:__|-)/i,
+  /can help you find your next opportunity/i,
+  /^get the latest jobs and industry news\b/i,
+  // Lone Tailwind / utility class fragments.
+  /^(py|px|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|gap|w|h|min-w|min-h|max-w|max-h)-\d+\s*["']?\s*>?\s*$/i,
+  /^rounded(-(sm|md|lg|xl|full))?\s*["']?\s*>?\s*$/i,
+  /^shadow(-(sm|md|lg|xl))?\s*["']?\s*>?\s*$/i,
+  /^font-(?:regular|medium|semibold|bold|normal)\s*["']?\s*>?\s*$/i,
+  /^leading-(?:regular|tight|snug|relaxed|loose|none)\s*["']?\s*>?\s*$/i,
 ];
 
 /* Patterns marking lines that look like LinkedIn class-attribute / style
@@ -1826,9 +2048,114 @@ export function cleanLinkedInDescription(description: string): string {
     if (FORBIDDEN_DESC_LINE_PATTERNS.some((re) => re.test(trimmed))) continue;
     if (lineContainsCssResidue(trimmed)) continue;
     if (looksLikeMarkupResidue(line)) continue;
+    // Drop standalone language-selector entries that slipped past the
+    // pre-cleaner (e.g. inside an AI-returned description).
+    if (isLanguageSelectorLine(trimmed)) continue;
     out.push(line);
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/* Quality gate for a candidate job description.
+ *
+ * Returns true when the description text plausibly describes a job, role,
+ * or career narrative — and false when it's mostly LinkedIn chrome /
+ * footer / language-selector noise.
+ *
+ * Heuristic:
+ *   1. Strip what the cleaner would drop, line by line.
+ *   2. Require a minimum amount of remaining prose (>= 80 chars, >= 12
+ *      meaningful words).
+ *   3. Require at least one "career-meaningful" token in the survivors —
+ *      role keywords, technology terms, or About / Experience markers.
+ *   4. Reject when more than ~40% of the cleaned lines look like chrome,
+ *      legal, footer, or language-selector tokens.
+ *
+ * The goal is fail-closed: when in doubt, return false so the route
+ * surfaces a "limited content" warning rather than filling Job
+ * Description with garbage. */
+export function descriptionPassesQualityGate(description: string): boolean {
+  if (!description) return false;
+  const cleaned = cleanLinkedInDescription(description).trim();
+  if (cleaned.length < 80) return false;
+
+  const lines = cleaned
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+
+  const words = cleaned.split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
+  if (words.length < 12) return false;
+
+  // Strong career / job markers — any of these in the remaining prose
+  // signal that this is a real description, not chrome.
+  const careerMarkerRe =
+    /\b(experience|responsibilities|requirements|qualifications|skills|about\s+the\s+(role|job|team|company)|current\s+role|program\s+management|product\s+management|engineering|developer|engineer|manager|director|lead|architect|analyst|consultant|specialist|designer|operations|platform|services|systems?|cloud|infrastructure|technical|software|hardware|build|deliver|deliver(?:y|ed|ing)|own(?:ed|ership)?|drove|drive|driving|partner(?:ed|ing)?\s+with|collabor(?:ated|ation|ate)|cross[- ]functional|stakeholder|roadmap|strategy|strategic|portfolio|customer|business|data|analytics|predictive|iot|crm|erp|bi|sql|azure|aws|gcp|kubernetes|kafka|jira|confluence|agile|scrum|kanban|safe|pmp)\b/i;
+
+  let careerHits = 0;
+  let chromeHits = 0;
+  for (const line of lines) {
+    if (careerMarkerRe.test(line)) careerHits += 1;
+    if (
+      FORBIDDEN_DESC_LINE_PATTERNS.some((re) => re.test(line)) ||
+      lineContainsCssResidue(line) ||
+      isLanguageSelectorLine(line) ||
+      /\b(accessibility|copyright|brand policy|guest controls|california privacy)\b/i.test(line)
+    ) {
+      chromeHits += 1;
+    }
+  }
+  if (careerHits === 0) return false;
+  if (chromeHits / Math.max(lines.length, 1) > 0.4) return false;
+  return true;
+}
+
+/* Synthesise a clean description from trusted header / context fields.
+ *
+ * Used as a fail-closed fallback when the candidate description fails the
+ * quality gate. Only assembles content from fields the caller already
+ * vouches for (title / company / location / tech context). Returns an
+ * empty string if there is genuinely nothing to say. */
+export function synthesizeCleanDescription(args: {
+  job_title?: string;
+  company?: string;
+  location?: string;
+  technology_context?: string;
+}): string {
+  const parts: string[] = [];
+  const header: string[] = [];
+  if (args.job_title) header.push(args.job_title);
+  if (args.company) header.push(`at ${args.company}`);
+  if (header.length) {
+    parts.push(`LinkedIn profile summary / current role`);
+    parts.push(`Current role: ${header.join(" ")}${args.location ? ` (${args.location})` : ""}`);
+  }
+  if (args.technology_context) {
+    parts.push(`Specialties / focus areas: ${args.technology_context}`);
+  }
+  return parts.join("\n\n").trim();
+}
+
+/* Mine technology_context terms from arbitrary cleaned text. Re-uses the
+ * profile-section extractor by feeding the input as the About lines so
+ * even when no Specialties / Skills section is detected we still surface
+ * any tech vocabulary that's present. */
+export function extractTechnologyContextFromRawText(rawText: string): string {
+  if (!rawText) return "";
+  // Run the cleaner first so chrome lines don't leak tokens like "policy"
+  // into the tech list.
+  const cleaned = cleanLinkedInDescription(rawText);
+  const lines = cleaned
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return extractTechnologyContextFromProfile({
+    aboutLines: lines,
+    specialtiesLines: [],
+    skillsLines: [],
+    currentRoleDetails: [],
+  });
 }
 
 /* Sanitize a short single-line field (title / company / location /
@@ -1914,7 +2241,7 @@ export function looksLikeLoggedOutPreview(
   parsed: LinkedInAiExtraction,
 ): boolean {
   if (!pasted) return false;
-  const text = pasted.slice(0, 8_000);
+  const text = pasted.slice(0, 16_000);
   const ctaHits = [
     /by clicking continue to join or sign in/i,
     /new to linkedin\??/i,
@@ -1923,13 +2250,27 @@ export function looksLikeLoggedOutPreview(
     /view\s+\S+'?s?\s+full\s+(experience|profile)/i,
     /see\s+their\s+title,?\s+tenure\s+and\s+more/i,
   ].reduce((n, re) => (re.test(text) ? n + 1 : n), 0);
+  // Footer / language-selector signal — additional evidence the user
+  // pasted the page chrome rather than a real profile section.
+  const footerHits = [
+    /\baccessibility\b/i,
+    /\byour california privacy choices\b/i,
+    /\bcopyright policy\b/i,
+    /\bbrand policy\b/i,
+    /\bguest controls\b/i,
+    /language-selector/i,
+    /data-tracking-control-name/i,
+    /data-locale=/i,
+  ].reduce((n, re) => (re.test(text) ? n + 1 : n), 0);
   // Did we extract a real description or just a stub?
   const descLen = (parsed.job_description ?? "").length;
   const descIsSynthOnly = /^LinkedIn profile summary \/ current role/i.test(
     parsed.job_description ?? "",
-  ) && descLen < 240;
-  // Multiple CTAs + thin description => likely logged-out preview.
-  return ctaHits >= 2 && (descLen < 200 || descIsSynthOnly);
+  ) && descLen < 400;
+  // Multiple CTAs / footer hits + thin description => logged-out preview.
+  if (ctaHits >= 2 && (descLen < 200 || descIsSynthOnly)) return true;
+  if (footerHits >= 2 && (descLen < 200 || descIsSynthOnly)) return true;
+  return false;
 }
 
 /* Public: extract LinkedIn job fields from pasted text using AI when a
@@ -1952,6 +2293,15 @@ export async function extractLinkedInJobWithAI(
   if (heuristic.technology_context) {
     heuristic.technology_context = sanitizeTechnologyContextString(heuristic.technology_context);
   }
+  // Always mine technology_context from the raw cleaned text as a
+  // safety net: even when the description ultimately fails the quality
+  // gate and gets discarded, we want any tech vocabulary present in the
+  // user's paste to flow through to the UI.
+  const tcFromRaw = extractTechnologyContextFromRawText(preCleaned);
+  heuristic.technology_context = mergeTechnologyContext(
+    heuristic.technology_context ?? "",
+    tcFromRaw,
+  );
   const text = preCleaned.trim();
   if (!text) {
     return finalizeLinkedInResult(heuristic, "heuristic");
@@ -1995,15 +2345,21 @@ export async function extractLinkedInJobWithAI(
     const job_title = aiTitle || heuristic.job_title;
     const company = aiCompany || heuristic.company;
     const location = aiLocation || heuristic.location;
-    // Pick the better description — AI when it isn't preview chrome,
-    // otherwise heuristic.
+    // Pick the better description. Prefer AI when it passes the quality
+    // gate; otherwise prefer the heuristic; otherwise leave empty so the
+    // finalize step can synthesise from header fields. We never accept a
+    // candidate that fails the gate (those carry footer / chrome / legal
+    // noise we don't want in Job Description under any circumstance).
     let job_description = "";
-    if (aiDescRaw && !descriptionLooksLikePreviewChrome(aiDescRaw)) {
+    if (aiDescRaw && descriptionPassesQualityGate(aiDescRaw)) {
       job_description = aiDescRaw;
-    } else if (heuristic.job_description && !descriptionLooksLikePreviewChrome(heuristic.job_description)) {
+    } else if (
+      heuristic.job_description &&
+      descriptionPassesQualityGate(heuristic.job_description)
+    ) {
       job_description = heuristic.job_description;
     } else {
-      job_description = aiDescRaw || heuristic.job_description || "";
+      job_description = "";
     }
     job_description = cleanLinkedInDescription(job_description);
     if (job_description.length > 12_000) {
@@ -2067,27 +2423,20 @@ export function finalizeLinkedInResult(
   if (job_description.length > 12_000) {
     job_description = `${job_description.slice(0, 12_000).trimEnd()}…`;
   }
-  if (descriptionLooksLikePreviewChrome(job_description)) {
-    // Only synthesise when we actually have header/tech content to put
-    // in the synthesised description. Otherwise leave it empty so the
-    // route can surface a "nothing recognisable" message instead.
-    const hasAnything = Boolean(job_title || company || location || tech_context);
-    if (hasAnything) {
-      const parts: string[] = ["LinkedIn profile summary / current role"];
-      const header: string[] = [];
-      if (job_title) header.push(job_title);
-      if (company) header.push(`at ${company}`);
-      if (header.length) parts.push(`Current role: ${header.join(" ")}`);
-      if (tech_context) parts.push(`Specialties / focus areas: ${tech_context}`);
-      const aboutLike = job_description
-        .split(/\n+/)
-        .map((l) => l.trim())
-        .filter((l) => l.length > 30 && /[a-zA-Z]/.test(l));
-      if (aboutLike.length) parts.push(aboutLike.slice(0, 8).join("\n"));
-      job_description = parts.join("\n\n").trim();
-    } else {
-      job_description = "";
-    }
+
+  // Fail-closed quality gate: if the cleaned description does not pass
+  // the gate, NEVER return the chrome / footer noise as the description.
+  // Instead synthesise a short clean description from trusted header
+  // fields (when we have any) or return blank (UI will surface a
+  // "limited content" warning).
+  if (!descriptionPassesQualityGate(job_description)) {
+    const synthesised = synthesizeCleanDescription({
+      job_title,
+      company,
+      location,
+      technology_context: tech_context,
+    });
+    job_description = synthesised; // empty string when no trusted fields
   }
 
   return {
