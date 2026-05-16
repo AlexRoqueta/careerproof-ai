@@ -485,7 +485,7 @@ export default function Analyze() {
             Import from LinkedIn <span className="text-xs font-normal text-muted-foreground ml-1">(optional)</span>
           </CardTitle>
           <CardDescription>
-            Paste a LinkedIn job URL <em>and/or</em> the visible job text. We try the URL first, then fall back to your pasted text. No LinkedIn login is required and credentials are never collected.
+            Paste a LinkedIn job URL <em>and/or</em> the visible job text. You can also paste your <strong>own LinkedIn profile</strong> (About + current Experience) to analyse your current role. No LinkedIn login is required and credentials are never collected.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -505,12 +505,12 @@ export default function Analyze() {
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="linkedin_text" className="text-sm">Or paste the job text from LinkedIn</Label>
+            <Label htmlFor="linkedin_text" className="text-sm">Or paste the job text — or your LinkedIn profile / current role</Label>
             <Textarea
               id="linkedin_text"
               value={linkedinPasted}
               onChange={(e) => setLinkedinPasted(e.target.value)}
-              placeholder={"Open the LinkedIn job, select the visible job text (title, company, location, full description), copy, and paste it here."}
+              placeholder={"Paste a LinkedIn job (title, company, location, description) — or paste your own LinkedIn profile (headline, About, current Experience, Specialties / Skills). We detect which one it is."}
               rows={5}
               className="resize-none"
               data-testid="input-linkedin-text"

@@ -543,10 +543,15 @@ function looksLikeLinkedInProfile(lines: string[]): boolean {
     if (/^skills$/i.test(line)) profileSignal += 1;
     if (/^about$/i.test(line)) profileSignal += 1;
     if (/^contact$/i.test(line)) profileSignal += 1;
+    if (/^specialties\b/i.test(line)) profileSignal += 2;
     if (/^licenses?\s*&?\s*certifications?$/i.test(line)) profileSignal += 1;
+    if (/^(current|suggested) (company|title)\b/i.test(line)) profileSignal += 2;
     if (/\bpresent\b/i.test(lower) && /\b(19|20)\d{2}\b/.test(lower)) profileSignal += 2;
     if (/·\s*(full[- ]time|part[- ]time|contract|self[- ]employed|freelance|internship)\b/i.test(lower))
       profileSignal += 2;
+    if (/^connections?$/i.test(line)) profileSignal += 1;
+    if (/\b\d[\d,]*\+?\s+connections?\b/i.test(lower)) profileSignal += 1;
+    if (/\b\d[\d,]*\+?\s+followers?\b/i.test(lower)) profileSignal += 1;
     if (/^easy apply$/i.test(line) || /\bapply\b/i.test(line) && line.length < 30) postingSignal += 2;
     if (/\b\d[\d,]*\s+applicants\b/i.test(lower)) postingSignal += 3;
     if (/^posted\b.*\bago\b/i.test(lower)) postingSignal += 2;
@@ -615,6 +620,7 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
     "licenses & certifications", "licenses and certifications",
     "certifications", "volunteer experience", "publications",
     "projects", "languages", "courses", "honors & awards", "honors and awards",
+    "specialties", "specialities",
   ]);
   const isSectionHeader = (s: string) => headerKeywords.has(s.trim().toLowerCase());
 
@@ -623,7 +629,7 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
   //    candidate's name typically sits at position 0; the headline is
   //    one of the next few lines.
   const rolePattern =
-    /\b(engineer|developer|manager|director|designer|analyst|consultant|specialist|lead|founder|owner|ceo|cfo|coo|cio|cto|chief|president|vp|head of|architect|nurse|surgeon|doctor|teacher|professor|attorney|lawyer|paralegal|accountant|bookkeeper|marketer|writer|editor|producer|administrator|coordinator|operator|technician|mechanic|electrician|plumber|chef|cook|sales|representative|associate|executive|partner|principal|scientist|researcher|advisor|strategist|officer|controller|auditor|recruiter|trainer|coach|therapist|counselor|paramedic|firefighter|programmer|copywriter|stylist|barista|cashier|clerk|assistant|intern|apprentice|technologist|pharmacist|dentist|veterinarian|psychologist)\b/i;
+    /\b(engineer|developer|manager|director|designer|analyst|consultant|specialist|lead|founder|owner|ceo|cfo|coo|cio|cto|chief|president|vp|head of|architect|nurse|surgeon|doctor|teacher|professor|attorney|lawyer|paralegal|accountant|bookkeeper|marketer|writer|editor|producer|administrator|coordinator|operator|technician|mechanic|electrician|plumber|chef|cook|sales|representative|associate|executive|partner|principal|scientist|researcher|advisor|strategist|officer|controller|auditor|recruiter|trainer|coach|therapist|counselor|paramedic|firefighter|programmer|copywriter|stylist|barista|cashier|clerk|assistant|intern|apprentice|technologist|pharmacist|dentist|veterinarian|psychologist|program manager|product manager|technical director)\b/i;
 
   const looksLikeLocation = (s: string) =>
     /\b(remote|hybrid|on[- ]site|onsite)\b/i.test(s) ||
@@ -636,8 +642,8 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
     const line = lines[i];
     if (!line || isSectionHeader(line)) continue;
     if (looksLikeLocation(line)) continue;
-    if (/^\d+\s+followers?\b/i.test(line)) continue;
-    if (/^\d+\s+connections?\b/i.test(line)) continue;
+    if (/^\d+\+?\s+followers?\b/i.test(line)) continue;
+    if (/^\d+\+?\s+connections?\b/i.test(line)) continue;
     if (!rolePattern.test(line)) continue;
     // Avoid grabbing the candidate name on line 0 unless it itself
     // contains a role token (rare, but possible: "Jane Doe, MD").
@@ -647,6 +653,9 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
       headlineTitle = split.title;
       headlineCompany = split.company;
     } else {
+      // Multi-role headlines like "Senior Program Manager / Technical
+      // Director" — keep the whole line as the title; we normalise
+      // through toTitleCase later.
       headlineTitle = line;
     }
     break;
@@ -740,24 +749,95 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
     }
   }
 
-  // Prefer headline when it carries a role; otherwise the experience-
-  // section role; final fallback empty.
-  const job_title = headlineTitle || experienceTitle || "";
-  const company = headlineCompany || experienceCompany || "";
-
-  // For the description, prefer the "About" section text when present
-  // (it's the user's own summary), else stitch together the headline
-  // and current-role line as a short context blurb so the analysis has
-  // something to work with.
-  let description = "";
-  const aboutIdx = lines.findIndex((l) => /^about$/i.test(l.trim()));
-  if (aboutIdx >= 0) {
-    const after = lines.slice(aboutIdx + 1);
-    const stopAt = after.findIndex((l) => isSectionHeader(l));
-    const aboutLines = stopAt >= 0 ? after.slice(0, stopAt) : after.slice(0, 40);
-    description = aboutLines.join("\n").trim();
+  // 2b. Some pastes include labelled fields like "Current company:
+  //     Smart Staffing Solutions" or "Suggested current title:
+  //     Sr. Program Manager" — surface them as overrides when the
+  //     structured Experience block didn't yield a confident value.
+  let labelledCompany = "";
+  let labelledTitle = "";
+  let labelledLocation = "";
+  const labelRe = /^(current\s+company|company|current\s+title|title|suggested\s+current\s+title|suggested\s+title|location|based\s+in)\s*[:\-]\s*(.+)$/i;
+  for (const line of lines) {
+    const m = line.match(labelRe);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim().replace(/[·•].*$/, "").trim();
+    if (!val) continue;
+    if (/company/i.test(key) && !labelledCompany) labelledCompany = val;
+    else if (/title/i.test(key) && !labelledTitle) labelledTitle = val;
+    else if (/(location|based)/i.test(key) && !labelledLocation) labelledLocation = val;
   }
-  if (!description) {
+
+  // Prefer headline when it carries a role; otherwise the experience-
+  // section role; otherwise an explicit "Suggested current title"
+  // label. Final fallback empty.
+  const job_title = experienceTitle || headlineTitle || labelledTitle || "";
+  const company = experienceCompany || headlineCompany || labelledCompany || "";
+
+  // Pull the About section, the current Experience details, and any
+  // Specialties / Skills lines so we can both (a) populate a clean
+  // synthesised description, and (b) derive technology_context.
+  const sectionRange = (header: RegExp, capLines: number): string[] => {
+    const idx = lines.findIndex((l) => header.test(l.trim()));
+    if (idx < 0) return [];
+    const after = lines.slice(idx + 1);
+    const stopAt = after.findIndex((l) => isSectionHeader(l));
+    return stopAt >= 0 ? after.slice(0, stopAt) : after.slice(0, capLines);
+  };
+  const aboutLines = sectionRange(/^about$/i, 80);
+  const specialtiesLines = sectionRange(/^specialt(ies|ities)\b/i, 30);
+  const skillsLines = sectionRange(/^skills$/i, 60);
+
+  // Capture the responsibilities under the *current* experience row.
+  let currentRoleDetails: string[] = [];
+  const expIndexForDetails = lines.findIndex((l) => /^experience$/i.test(l.trim()));
+  if (expIndexForDetails >= 0) {
+    const expSlice2 = lines.slice(expIndexForDetails + 1, expIndexForDetails + 80);
+    const stopAt = expSlice2.findIndex((l) => isSectionHeader(l));
+    const expLines2 = stopAt >= 0 ? expSlice2.slice(0, stopAt) : expSlice2;
+    const datePresentRe2 = /\b(19|20)\d{2}\b.*\b(present|current|now)\b/i;
+    const datePresentIdx = expLines2.findIndex((l) => datePresentRe2.test(l));
+    if (datePresentIdx >= 0) {
+      // Take the lines after the date row until we hit either another
+      // date row (next experience entry) or a section break.
+      const after = expLines2.slice(datePresentIdx + 1);
+      const nextDate = after.findIndex((l) =>
+        /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\b/i.test(l) ||
+          /\b(19|20)\d{2}\s*[-–—]\s*(19|20)\d{2}\b/.test(l) ||
+          datePresentRe2.test(l),
+      );
+      const sliced = nextDate >= 0 ? after.slice(0, nextDate) : after;
+      currentRoleDetails = sliced
+        .filter((l) => l.trim().length > 0)
+        // Drop obvious "skills: A · B · C" lines from the body — we
+        // route those into technology_context separately.
+        .filter((l) => !/^skills?\s*[:\-]/i.test(l))
+        .slice(0, 60);
+    }
+  }
+
+  // Compose a synthesised description that focuses on About + current
+  // role. We label it so the analysis pipeline knows the source. We
+  // intentionally avoid concatenating raw page text — the pre-cleaner
+  // already removed login/nav chrome, and this synthesis prevents any
+  // sidebar widget that slipped through from appearing as a job
+  // description.
+  let description = "";
+  const synthParts: string[] = [];
+  if (job_title || company) {
+    const header = [job_title, company].filter(Boolean).join(" at ");
+    if (header) synthParts.push(`Current role: ${header}`);
+  }
+  if (aboutLines.length) {
+    synthParts.push("About:\n" + aboutLines.join("\n").trim());
+  }
+  if (currentRoleDetails.length) {
+    synthParts.push("Current role responsibilities:\n" + currentRoleDetails.join("\n").trim());
+  }
+  if (synthParts.length) {
+    description = "LinkedIn profile summary / current role\n\n" + synthParts.join("\n\n");
+  } else {
+    // Last-resort: stitch together the headline and current-role line.
     const parts: string[] = [];
     if (headlineTitle) parts.push(headlineTitle + (headlineCompany ? ` at ${headlineCompany}` : ""));
     if (experienceTitle && experienceTitle !== headlineTitle)
@@ -765,16 +845,33 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
     description = parts.join("\n").trim();
   }
 
+  // Cap description to keep the analyse request bounded.
+  if (description.length > 12_000) {
+    description = `${description.slice(0, 12_000).trimEnd()}…`;
+  }
+
+  // technology_context: lift from Specialties / Skills first (most
+  // signal-dense), then mine the About body for inline technology
+  // mentions. Trimmed, de-duped, capped.
+  const technology_context = extractTechnologyContextFromProfile({
+    aboutLines,
+    specialtiesLines,
+    skillsLines,
+    currentRoleDetails,
+  });
+
   // Location: a line near the top that matches the location pattern
   // and isn't already the company.
-  let location = "";
-  for (let i = 0; i < Math.min(lines.length, 12); i++) {
-    const line = lines[i];
-    if (!line || isSectionHeader(line)) continue;
-    if (line === company) continue;
-    if (looksLikeLocation(line) && !/at\s+/i.test(line)) {
-      location = line;
-      break;
+  let location = labelledLocation;
+  if (!location) {
+    for (let i = 0; i < Math.min(lines.length, 12); i++) {
+      const line = lines[i];
+      if (!line || isSectionHeader(line)) continue;
+      if (line === company) continue;
+      if (looksLikeLocation(line) && !/at\s+/i.test(line)) {
+        location = line;
+        break;
+      }
     }
   }
 
@@ -783,7 +880,239 @@ function parseLinkedInProfileText(lines: string[]): LinkedInParsedJob {
     company,
     location,
     job_description: description,
+    technology_context,
   };
+}
+
+/* Mine a LinkedIn profile's About / Specialties / Skills / current-role
+ * sections for a 1-3 sentence technology_context blurb. Prefers the
+ * Specialties list (which is usually a comma- or bullet-separated set
+ * of disciplines) when present, falls back to the Skills section, and
+ * stitches in any explicit technology mentions found in the About body
+ * or current-role responsibilities. Returns "" when nothing useful is
+ * found so the caller can decide whether to fall back to a default. */
+function extractTechnologyContextFromProfile(args: {
+  aboutLines: string[];
+  specialtiesLines: string[];
+  skillsLines: string[];
+  currentRoleDetails: string[];
+}): string {
+  const items: string[] = [];
+  const pushItems = (raw: string) => {
+    for (const part of raw.split(/[,•·;\n]|\s+\|\s+|\s+/)) {
+      const v = part.replace(/^[\-\*•·]\s*/, "").trim();
+      if (!v) continue;
+      if (v.length < 2 || v.length > 60) continue;
+      if (!/[a-zA-Z]/.test(v)) continue;
+      // Skip filler / common stopwords.
+      if (/^(and|or|with|using|the|a|an|of|to|for|in|on|by|including)$/i.test(v)) continue;
+      items.push(v);
+    }
+  };
+  // Specialties section text — usually one long comma-separated line.
+  for (const line of args.specialtiesLines) {
+    if (/^[A-Za-z]/.test(line) && /,/.test(line)) {
+      // Split on commas, preserve multi-word phrases.
+      for (const part of line.split(/,/)) {
+        const v = part.replace(/^[\-\*•·]\s*/, "").replace(/\.$/, "").trim();
+        if (v && v.length >= 2 && v.length <= 80) items.push(v);
+      }
+    } else {
+      pushItems(line);
+    }
+  }
+  // Skills section: usually one per line.
+  for (const line of args.skillsLines) {
+    const v = line.replace(/^[\-\*•·]\s*/, "").trim();
+    if (v && v.length >= 2 && v.length <= 80 && /[a-zA-Z]/.test(v)) items.push(v);
+  }
+  // Mine inline technology names from About + current-role responsibilities.
+  const techVocab = [
+    "Azure", "AWS", "GCP", "Google Cloud", "Salesforce", "Snowflake", "SQL",
+    "Python", "R", "Java", "C#", "C++", "Go", "Rust", "TypeScript", "JavaScript",
+    "React", "Angular", "Vue", "Node.js", "Django", "Spring", "Kubernetes",
+    "Docker", "Terraform", "Jenkins", "GitHub", "GitLab", "Jira", "Confluence",
+    "Tableau", "Power BI", "BI", "ETL", "Hadoop", "Spark", "Kafka", "Kinesis",
+    "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "GraphQL",
+    "REST", "gRPC", "OAuth", "OIDC", "ServiceNow", "SSRS", "SAP", "Crystal Reports",
+    "CRM", "ERP", "IoT", "AI", "ML", "LLM", "GPT", "Claude", "Predictive Analytics",
+    "Big Data", "Cloud", "Agile", "Scrum", "Kanban", "SAFe", "PMP", "PMI",
+    "Technical Program Management", "Program Management", "Product Development",
+    "New Product Development", "Customer Experience", "Business Intelligence",
+  ];
+  const blob = [...args.aboutLines, ...args.currentRoleDetails].join("\n");
+  for (const term of techVocab) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Use lookarounds instead of \b so tokens like "C++" or "Node.js" match.
+    const re = new RegExp(`(^|[^A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "i");
+    if (re.test(blob)) items.push(term);
+  }
+  // De-dupe case-insensitively while preserving first-seen casing, and
+  // cap the list so we don't return a wall of text.
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const it of items) {
+    const key = it.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(it);
+    if (unique.length >= 30) break;
+  }
+  if (unique.length === 0) return "";
+  return unique.join(", ");
+}
+
+/* Pre-clean pasted LinkedIn page text before any parsing.
+ *
+ * When a user copies a LinkedIn profile or job page from the browser
+ * (especially from a logged-out tab), the clipboard often includes a
+ * lot of page chrome: the global nav, the login form ("Welcome back",
+ * "Email or phone", "Password", "Show", "Forgot password?", "Sign in",
+ * "New to LinkedIn?", "Join now"), the cookie banner, footer legal,
+ * masked profile snippets ("***@gmail.com"), markdown image / link
+ * residue, raw CSS selectors and class names, and "Suggested for you"
+ * sidebar widgets.
+ *
+ * None of this is useful to the parser or the LLM — and the LLM in
+ * particular can be tempted to repeat any plausible-looking text into
+ * job_description. We strip it here, line-by-line, before we hand the
+ * text to either path. The list is conservative: when in doubt we keep
+ * the line. */
+const LINKEDIN_LOGIN_CHROME_LINES = new Set(
+  [
+    "welcome back",
+    "email or phone",
+    "phone",
+    "password",
+    "show",
+    "hide",
+    "forgot password?",
+    "forgot password",
+    "sign in",
+    "sign in with google",
+    "sign in with apple",
+    "new to linkedin?",
+    "new to linkedin",
+    "join now",
+    "join linkedin",
+    "or",
+    "by clicking continue to join or sign in, you agree to linkedin's user agreement, privacy policy, and cookie policy.",
+    "user agreement",
+    "privacy policy",
+    "cookie policy",
+    "cookie preferences",
+    "community guidelines",
+    "skip to main content",
+    "skip to search",
+    "agree & join linkedin",
+    "remember me",
+    "stay updated on your professional world",
+    "suggested for you",
+    "people you may know",
+    "people also viewed",
+    "people also searched for",
+    "you might like",
+    "see all",
+    "see less",
+    "see more",
+    "show all",
+    "show more",
+    "show less",
+    "more",
+    "open to",
+    "add profile section",
+    "enhance profile",
+    "resources",
+    "activity",
+    "loading…",
+    "loading...",
+    "loading",
+    "back",
+    "next",
+    "continue",
+    "english (english)",
+    "language",
+  ].map((s) => s.toLowerCase()),
+);
+
+/* Does this line look like CSS/JS/markup residue (a class name fragment,
+ * a CSS rule, an inline-style snippet, an image-link line, a raw URL
+ * pasted on its own line)? These slip into the clipboard when a user
+ * copies from a partially-rendered or screen-reader-augmented page. */
+function looksLikeMarkupResidue(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  // Masked or asterisk-only lines: "***@gmail.com", "*****", "•••••"
+  if (/^[\s*•·•]+$/.test(t)) return true;
+  if (/^\*{3,}/.test(t) && t.length < 60) return true;
+  // CSS rules: "color: #fff;" or ".class { color: red; }"
+  if (/^[.#][a-zA-Z][\w\-]*\s*\{/.test(t)) return true;
+  if (/^[a-zA-Z\-]+\s*:\s*[^:;]+;?\s*$/.test(t) && /[#{}();]|px|rem|em/.test(t)) return true;
+  // CSS-class-only lines ("artdeco-button artdeco-button--secondary")
+  if (/^[a-z][a-z0-9\-]*(\s+[a-z][a-z0-9\-]*){1,}$/.test(t) && /\-\-|artdeco|linkedin|li-/.test(t)) return true;
+  // Lines that are JUST a URL (no surrounding prose).
+  if (/^https?:\/\/\S+$/.test(t)) return true;
+  // Markdown image syntax fragments: "![alt](https://...)" or "[](url)"
+  if (/^!\[[^\]]*\]\([^)]*\)$/.test(t)) return true;
+  if (/^\[[^\]]*\]\([^)]*\)$/.test(t) && t.length < 200) return true;
+  // Single-character or two-character ornament lines.
+  if (t.length <= 2) return true;
+  // Long opaque hash-like strings that aren't sentences.
+  if (/^[a-zA-Z0-9_\-]{40,}$/.test(t)) return true;
+  return false;
+}
+
+/* True when this line is page chrome we want to drop. Conservative —
+ * only matches the well-known login/nav phrases and CSS-ish noise. */
+function isLinkedInPageChrome(line: string): boolean {
+  const lower = line.trim().toLowerCase();
+  if (!lower) return true;
+  if (LINKEDIN_LOGIN_CHROME_LINES.has(lower)) return true;
+  // Cookie banner / consent
+  if (/^accept (all )?cookies\b/i.test(lower)) return true;
+  if (/^reject (all )?cookies\b/i.test(lower)) return true;
+  if (/^manage cookies\b/i.test(lower)) return true;
+  // Footer-y lines
+  if (/^©\s?\d{4}\b/.test(lower)) return true;
+  if (/^linkedin\s+corporation\b/i.test(lower)) return true;
+  // "1d", "2h", "3 hours ago" style timestamps on their own line
+  if (/^\d+\s*(s|m|h|d|w|mo|y)$/i.test(lower)) return true;
+  // Generic "Email or phone *@gmail.com" line residue.
+  if (/email or phone/i.test(lower) && /\*/.test(lower)) return true;
+  // Markup residue check.
+  if (looksLikeMarkupResidue(line)) return true;
+  return false;
+}
+
+/* Strip the login/nav/footer/CSS clutter from pasted text before any
+ * downstream parsing. Returns the cleaned text with original line
+ * breaks preserved (collapsed to at most one blank line). Exposed for
+ * verification scripts via the underscored export. */
+export function cleanPastedLinkedInText(rawInput: string): string {
+  if (!rawInput) return "";
+  const lines = rawInput.split(/\r?\n/);
+  const kept: string[] = [];
+  let lastWasBlank = false;
+  for (const raw of lines) {
+    const line = raw.replace(/[​-‍﻿]/g, "").trimEnd();
+    if (isLinkedInPageChrome(line)) {
+      if (!lastWasBlank && kept.length > 0) {
+        kept.push("");
+        lastWasBlank = true;
+      }
+      continue;
+    }
+    kept.push(line);
+    lastWasBlank = line.trim() === "";
+  }
+  // Collapse runs of blanks.
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/* Internal alias used by the parser; kept private so callers go through
+ * cleanPastedLinkedInText. */
+function preCleanLinkedInPaste(rawInput: string): string {
+  return cleanPastedLinkedInText(rawInput);
 }
 
 /* Public: parse pasted LinkedIn job text (or HTML-stripped fetched
@@ -800,7 +1129,9 @@ export function parseLinkedInJobText(rawInput: string): LinkedInParsedJob {
       return ld;
     }
   }
-  const cleanedText = /<[^>]+>/.test(rawInput) ? stripHtmlToText(rawInput) : rawInput;
+  const htmlStripped = /<[^>]+>/.test(rawInput) ? stripHtmlToText(rawInput) : rawInput;
+  // Drop login/nav/CSS/footer chrome before structural parsing.
+  const cleanedText = preCleanLinkedInPaste(htmlStripped);
   const lines = cleanedText
     .split(/\n+/)
     .map((l) => l.replace(/\s+/g, " ").trim())
@@ -888,6 +1219,8 @@ export function parseLinkedInJobText(rawInput: string): LinkedInParsedJob {
     descriptionLines.push(line);
   }
   let job_description = descriptionLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  // Post-clean any chrome / CSS / mask residue that slipped through.
+  job_description = cleanLinkedInDescription(job_description);
   // Cap description so a pathological paste doesn't blow up the request
   // body when the user submits the form. 12k chars matches the resume
   // PDF extraction cap.
@@ -1216,35 +1549,92 @@ const defaultLlmFetcher: LlmFetcher = async ({ provider, apiKey, model, prompt, 
 };
 
 const EXTRACTION_PROMPT_PREAMBLE = [
-  "You are an extraction assistant. Given pasted LinkedIn job-posting text,",
-  "produce STRICT JSON with these keys and nothing else:",
+  "You are an extraction assistant. Given pasted LinkedIn text — which may",
+  "be a JOB POSTING or a CANDIDATE PROFILE (the user's own LinkedIn page",
+  "with About / Experience / Skills sections) — produce STRICT JSON with",
+  "these keys and nothing else:",
   '  {"job_title": string, "company": string, "location": string,',
   '   "job_description": string, "technology_context": string,',
   '   "employment_type": string, "seniority": string}',
   "Rules:",
   "- Strings only. Use empty string when a field is not present in the text.",
-  "- job_title: the role being hired for (NOT the candidate name).",
-  "- company: hiring organization name (omit suffixes like \"Inc.\" only if obvious).",
+  "- If the text is a JOB POSTING: job_title = the role being hired for,",
+  "  company = the hiring organisation, job_description = responsibilities",
+  "  / requirements prose.",
+  "- If the text is a PROFILE / CURRENT ROLE summary: job_title = the",
+  "  user's CURRENT role (prefer the most recent Experience entry that",
+  "  contains 'Present'; otherwise the profile headline normalised to a",
+  "  clean role like 'Senior Program Manager / Technical Director';",
+  "  otherwise a 'Suggested current title' label). company = the current",
+  "  employer from the Experience section. job_description = a clean",
+  "  synthesised summary built from the About section AND the current",
+  "  Experience entry's responsibilities ONLY. Prefix the description",
+  "  with: 'LinkedIn profile summary / current role'.",
+  "- NEVER include any of the following in job_description: 'Welcome back',",
+  "  'Email or phone', 'Password', 'Show', 'Forgot password?', 'Sign in',",
+  "  'New to LinkedIn?', 'Join now', 'Cookie Policy', 'Privacy Policy',",
+  "  'User Agreement', 'Suggested for you', 'People you may know', CSS",
+  "  class names, raw URLs, markdown image links, masked-asterisk lines,",
+  "  applicants counts, 'Posted N ago', or 'Report this job'.",
   "- location: city/region/country and remote/hybrid/onsite when stated.",
-  "- job_description: clean prose describing the role's responsibilities,",
-  "  requirements, qualifications. Strip LinkedIn chrome (Apply, Save,",
-  "  applicants count, posted-N-days-ago, Report this job). Preserve bullets",
-  "  as plain dashes. Cap at ~6000 characters.",
-  "- technology_context: 1-3 sentences naming the tools, platforms, or",
-  "  frameworks the role typically uses based on the description. If the",
-  "  posting doesn't say, infer common ones for the role. May be empty.",
+  "- technology_context: 1-3 sentences (or a comma-separated list of",
+  "  tools/disciplines) naming the platforms, frameworks, methodologies,",
+  "  or domains the role uses. For profile pastes, prefer the Specialties",
+  "  / Skills sections and explicit mentions in About (Azure, AWS, IoT,",
+  "  CRM, Cloud, SQL, BI, Jira, Confluence, etc.). For postings, infer",
+  "  common ones when the text doesn't say. Do NOT leave empty when the",
+  "  Specialties / Skills sections name disciplines.",
   "- employment_type: one of \"Full-time\", \"Part-time\", \"Contract\",",
   "  \"Temporary\", \"Internship\", or empty.",
   "- seniority: one of \"Intern\", \"Entry\", \"Mid\", \"Senior\", \"Lead\",",
   "  \"Manager\", \"Director\", \"Executive\", or empty.",
+  "- Cap job_description at ~6000 characters.",
   "Return ONLY the JSON object — no prose, no markdown, no code fences.",
 ].join("\n");
 
 function buildExtractionPrompt(rawText: string): string {
   // Cap input to keep tokens (and cost) bounded. 24k characters is more
-  // than enough for any realistic job posting.
+  // than enough for any realistic job posting or profile.
   const capped = rawText.length > 24_000 ? `${rawText.slice(0, 24_000)}\n…[truncated]` : rawText;
   return `${EXTRACTION_PROMPT_PREAMBLE}\n\nPASTED TEXT:\n"""\n${capped}\n"""`;
+}
+
+/* Patterns we never want to see in the final job_description, whether
+ * it came from the heuristic parser or the LLM. The post-cleaner drops
+ * the matching lines (not the whole description) so we keep useful
+ * content while removing leaked chrome. */
+const FORBIDDEN_DESC_LINE_PATTERNS: RegExp[] = [
+  /^welcome back\b/i,
+  /^email or phone\b/i,
+  /^password\b/i,
+  /^show$/i,
+  /^hide$/i,
+  /^forgot password\??$/i,
+  /^sign in\b/i,
+  /^join now\b/i,
+  /^new to linkedin\??$/i,
+  /^cookie\s+(policy|preferences)\b/i,
+  /^privacy policy\b/i,
+  /^user agreement\b/i,
+  /^suggested for you\b/i,
+  /^people you may know\b/i,
+  /^skip to main content\b/i,
+  /^\d+\s+applicants?\b/i,
+  /^posted\b.*\bago\b/i,
+  /^report this job\b/i,
+  /^[\s*•·]+$/, // masked-asterisk / dot-only lines
+];
+
+export function cleanLinkedInDescription(description: string): string {
+  if (!description) return "";
+  const out: string[] = [];
+  for (const raw of description.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    if (FORBIDDEN_DESC_LINE_PATTERNS.some((re) => re.test(line.trim()))) continue;
+    if (looksLikeMarkupResidue(line)) continue;
+    out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function tryParseExtractionJson(raw: string): Partial<LinkedInParsedJob> | null {
@@ -1284,8 +1674,14 @@ export async function extractLinkedInJobWithAI(
   rawInput: string,
   opts?: { timeoutMs?: number },
 ): Promise<LinkedInAiExtraction> {
-  const heuristic = parseLinkedInJobText(rawInput);
-  const text = (rawInput ?? "").trim();
+  // Strip login / nav / cookie / CSS clutter BEFORE both the heuristic
+  // parser and the LLM see the text, so neither path can mistake page
+  // chrome for a job description.
+  const preCleaned = cleanPastedLinkedInText(rawInput ?? "");
+  const heuristic = parseLinkedInJobText(preCleaned);
+  // Final safety pass on the heuristic description.
+  heuristic.job_description = cleanLinkedInDescription(heuristic.job_description);
+  const text = preCleaned.trim();
   if (!text) {
     return { ...heuristic, source_engine: "heuristic" };
   }
@@ -1322,15 +1718,25 @@ export async function extractLinkedInJobWithAI(
     const company = parsed.company || heuristic.company;
     const location = parsed.location || heuristic.location;
     let job_description = parsed.job_description || heuristic.job_description;
+    // Post-clean: strip any forbidden chrome lines / CSS residue the AI
+    // may have leaked into the description.
+    job_description = cleanLinkedInDescription(job_description);
+    if (!job_description) job_description = cleanLinkedInDescription(heuristic.job_description);
     if (job_description.length > 12_000) {
       job_description = `${job_description.slice(0, 12_000).trimEnd()}…`;
     }
+    // Prefer the AI's technology_context, but fall back to the
+    // heuristic's profile-derived one so we never return blank when the
+    // profile listed Specialties / Skills.
+    const technology_context = (parsed.technology_context && parsed.technology_context.trim())
+      ? parsed.technology_context.trim()
+      : (heuristic.technology_context ?? "");
     const populatedFields = [
       job_title,
       company,
       location,
       job_description,
-      parsed.technology_context ?? "",
+      technology_context,
       parsed.employment_type ?? "",
       parsed.seniority ?? "",
     ].filter((v) => v.length > 0).length;
@@ -1342,7 +1748,7 @@ export async function extractLinkedInJobWithAI(
       company,
       location,
       job_description,
-      technology_context: parsed.technology_context || "",
+      technology_context,
       employment_type: parsed.employment_type || "",
       seniority: parsed.seniority || "",
       source_engine: "ai",

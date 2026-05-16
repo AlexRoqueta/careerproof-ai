@@ -29,6 +29,8 @@ import {
   parseLinkedInJobText,
   stripHtmlToText,
   extractLinkedInJobWithAI,
+  cleanPastedLinkedInText,
+  cleanLinkedInDescription,
   __setLlmFetcherForTests,
 } from "../server/ai";
 import { linkedinImportSchema } from "../shared/schema";
@@ -41,6 +43,7 @@ type Case = {
   expect_location?: string | RegExp;
   expect_description_includes?: string;
   expect_description_excludes?: string[];
+  expect_technology_context_includes?: string[];
   expect_empty?: boolean;
 };
 
@@ -133,6 +136,66 @@ Full-time
 Feb 2024 - Apr 2026 · 2 yrs 3 mos
 Austin, TX`;
 
+/* A representative "messy" LinkedIn paste from a logged-out browser tab:
+ * the clipboard includes the login form, cookie banner, masked profile
+ * snippets, CSS class fragments, and a "Suggested for you" sidebar
+ * widget. The actual profile content is interleaved with all of it. */
+const PROFILE_PASTE_WITH_LOGIN_CHROME = `Skip to main content
+LinkedIn
+Welcome back
+Email or phone
+***@gmail.com
+Password
+Show
+Forgot password?
+Sign in
+or
+New to LinkedIn?
+Join now
+By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement, Privacy Policy, and Cookie Policy.
+
+artdeco-button artdeco-button--secondary artdeco-button--3
+.global-nav__nav { display: flex; }
+![profile photo](https://media.licdn.com/dms/image/profile.jpg)
+
+Alex Roqueta
+Senior Program Manager / Technical Director
+Ladera Ranch, California, United States · Contact info
+500+ connections
+
+Current company: Smart Staffing Solutions
+Suggested current title: Sr. Program Manager
+
+About
+Senior Program Manager and Technical Director with 15+ years driving large-scale technical programs across IoT, Cloud, CRM, and Big Data platforms. I partner with cross-functional teams to deliver new product development end-to-end, from discovery to launch. Comfortable in Azure, SQL, and Jira-driven Agile environments. Passionate about customer experience and predictive analytics.
+
+Specialties
+Technical Program Management, IoT, CRM, Cloud, New Product Development, Big Data, Predictive Analytics, BI, Customer Experience, Product Development
+
+Experience
+Sr. Program Manager
+Smart Staffing Solutions · Contract
+Jan 2020 - Present · 6 yrs 4 mos
+Corona, CA
+- Lead cross-functional technical programs across IoT and Cloud platforms.
+- Manage roadmaps in Jira and Confluence, partnering with engineering, product, and customer success.
+- Built BI dashboards in SSRS and SAP Crystal Reports for executive reporting.
+- Drove predictive analytics initiatives using Azure ML and SQL.
+
+Program Manager
+Acme Technologies
+Mar 2014 - Dec 2019 · 5 yrs 10 mos
+Irvine, CA
+
+Suggested for you
+People you may know
+Show more
+
+© 2026 LinkedIn Corporation
+Cookie Policy
+Privacy Policy
+User Agreement`;
+
 const cases: Case[] = [
   {
     name: "LinkedIn profile — headline 'Title at Company' with current role",
@@ -150,6 +213,35 @@ const cases: Case[] = [
     name: "LinkedIn profile — latest role even without 'Present' marker",
     input: PROFILE_NO_PRESENT,
     expect_title: /Marketing Manager/,
+  },
+  {
+    name: "LinkedIn profile — paste with login/CSS chrome (user-reported case)",
+    input: PROFILE_PASTE_WITH_LOGIN_CHROME,
+    expect_title: /(Sr\.? Program Manager|Senior Program Manager)/i,
+    expect_company: /Smart Staffing Solutions/,
+    expect_location: /(Ladera Ranch|California|Corona)/,
+    expect_description_includes: "current role",
+    expect_description_excludes: [
+      "Welcome back",
+      "Email or phone",
+      "Password",
+      "Forgot password",
+      "Sign in",
+      "New to LinkedIn",
+      "Cookie Policy",
+      "Privacy Policy",
+      "User Agreement",
+      "artdeco-button",
+      ".global-nav__nav",
+      "Suggested for you",
+      "***@gmail.com",
+    ],
+    expect_technology_context_includes: [
+      "Technical Program Management",
+      "IoT",
+      "CRM",
+      "Cloud",
+    ],
   },
   {
     name: "typical pasted LinkedIn job",
@@ -234,6 +326,15 @@ for (const c of cases) {
       ]);
     }
   }
+  if (c.expect_technology_context_includes) {
+    for (const term of c.expect_technology_context_includes) {
+      const tech = (out.technology_context ?? "").toLowerCase();
+      checks.push([
+        `technology_context includes "${term}"`,
+        tech.includes(term.toLowerCase()),
+      ]);
+    }
+  }
   const allOk = checks.every(([, ok]) => ok);
   console.log(`${allOk ? "PASS" : "FAIL"}  ${c.name}`);
   if (!allOk) {
@@ -244,6 +345,7 @@ for (const c of cases) {
     console.log(`        got title       : ${JSON.stringify(out.job_title)}`);
     console.log(`        got company     : ${JSON.stringify(out.company)}`);
     console.log(`        got location    : ${JSON.stringify(out.location)}`);
+    console.log(`        got tech_context: ${JSON.stringify((out.technology_context ?? "").slice(0, 240))}`);
     console.log(`        description    : ${out.job_description.slice(0, 240).replace(/\n/g, " | ")}`);
   }
 }
@@ -282,6 +384,67 @@ console.log(`${stripCheck ? "PASS" : "FAIL"}  stripHtmlToText drops tags, script
 if (!stripCheck) {
   failed += 1;
   console.log(`        got: ${JSON.stringify(stripped)}`);
+}
+
+/* Direct cleaner unit checks: login form / CSS / cookie residue must be
+ * stripped both before parsing (cleanPastedLinkedInText) and from any
+ * description that the heuristic or AI path produces
+ * (cleanLinkedInDescription). */
+const cleanerCases: Array<[string, () => boolean, () => string]> = [
+  [
+    "cleanPastedLinkedInText drops 'Welcome back' login block",
+    () => {
+      const out = cleanPastedLinkedInText(
+        "Welcome back\nEmail or phone\n***@gmail.com\nPassword\nShow\nForgot password?\nSign in\nor\nNew to LinkedIn?\nJoin now\n\nAlex Roqueta\nSenior Program Manager / Technical Director",
+      );
+      return (
+        !/welcome back/i.test(out) &&
+        !/email or phone/i.test(out) &&
+        !/forgot password/i.test(out) &&
+        !/sign in/i.test(out) &&
+        !/new to linkedin/i.test(out) &&
+        /Alex Roqueta/.test(out) &&
+        /Senior Program Manager/i.test(out)
+      );
+    },
+    () => cleanPastedLinkedInText("Welcome back\nEmail or phone\nAlex Roqueta"),
+  ],
+  [
+    "cleanPastedLinkedInText drops CSS-class fragments and masked-star lines",
+    () => {
+      const out = cleanPastedLinkedInText(
+        "artdeco-button artdeco-button--secondary\n.global-nav__nav { display: flex; }\n*****\nReal content",
+      );
+      return !/artdeco-button/.test(out) && !/global-nav/.test(out) && !/\*\*\*\*\*/.test(out) && /Real content/.test(out);
+    },
+    () => cleanPastedLinkedInText("artdeco-button artdeco-button--secondary\nReal content"),
+  ],
+  [
+    "cleanLinkedInDescription strips chrome lines even when AI leaks them",
+    () => {
+      const out = cleanLinkedInDescription(
+        "LinkedIn profile summary / current role\n\nWelcome back\nEmail or phone\nPassword\nProgram management across IoT and Cloud platforms.\nCookie Policy",
+      );
+      return (
+        !/welcome back/i.test(out) &&
+        !/email or phone/i.test(out) &&
+        !/cookie policy/i.test(out) &&
+        /Program management/i.test(out)
+      );
+    },
+    () =>
+      cleanLinkedInDescription(
+        "Welcome back\nEmail or phone\nProgram management across IoT and Cloud platforms.",
+      ),
+  ],
+];
+for (const [name, check, debug] of cleanerCases) {
+  const ok = check();
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
+  if (!ok) {
+    failed += 1;
+    console.log(`        got: ${JSON.stringify(debug())}`);
+  }
 }
 
 /* =====================================================================
