@@ -31,6 +31,9 @@ import {
   extractLinkedInJobWithAI,
   cleanPastedLinkedInText,
   cleanLinkedInDescription,
+  sanitizeLinkedInShortField,
+  finalizeLinkedInResult,
+  looksLikeLoggedOutPreview,
   __setLlmFetcherForTests,
 } from "../server/ai";
 import { linkedinImportSchema } from "../shared/schema";
@@ -196,6 +199,51 @@ Cookie Policy
 Privacy Policy
 User Agreement`;
 
+/* Logged-out preview chrome reported by the user in 2026-05. This is the
+ * worst-case shape: barely any real profile content, CSS/Tailwind class
+ * residue everywhere, consent CTAs repeated 3+ times, masked-star
+ * garbage, and a "Suggested current title at Smart Staffing Solutions
+ * Sr. Program Manager?" prompt. The cleaner must drop ALL of the
+ * chrome and the title fallback must still produce something usable. */
+const PROFILE_LOGGED_OUT_PREVIEW = `Skip to main content
+LinkedIn
+Welcome back
+Email or phone
+*** * *********** *********
+Password
+Show
+Forgot password?
+Sign in
+or
+New to LinkedIn?
+Join now
+By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement , Privacy Policy , and Cookie Policy .
+
+Alex Roqueta
+Senior Program Manager / Technical Director
+Ladera Ranch, California, United States · Contact info
+
+About:
+Sr. Technical Program Manager/IOT innovator/Customer Experience Guru/Sr. Business-Systems
+I drive end-to-end technical programs across IoT, Cloud, CRM, and Big Data platforms — partnering with engineering, product, and customer success to ship new product development at scale. Comfortable in Azure, SQL, SSRS, SAP Crystal Reports, Jira, and Confluence with predictive analytics initiatives.
+
+By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement , Privacy Policy , and Cookie Policy .
+New to LinkedIn? Join now
+Experience & Education
+
+*]:mb-0 text-[18px] text-color-text leading-regular group-hover:underline font-semibold">
+Smart Staffing Solutions
+*]:mb-0 not-first-middot leading-[1.75]">
+*]:mb-0 [&>*]:text-md [&>*]:text-color-text-low-emphasis">
+
+Is your current title at Smart Staffing Solutions Sr. Program Manager?
+
+View Alex's full experience
+See their title, tenure and more.
+By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement , Privacy Policy , and Cookie Policy .
+New to LinkedIn? Join now
+By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement , Privacy Policy , and Cookie Policy .`;
+
 const cases: Case[] = [
   {
     name: "LinkedIn profile — headline 'Title at Company' with current role",
@@ -240,6 +288,35 @@ const cases: Case[] = [
       "Technical Program Management",
       "IoT",
       "CRM",
+      "Cloud",
+    ],
+  },
+  {
+    name: "LinkedIn profile — logged-out preview chrome (2026-05 user report)",
+    input: PROFILE_LOGGED_OUT_PREVIEW,
+    expect_title: /(Sr\.? Program Manager|Senior Program Manager|Sr\.? Technical Program Manager|Senior Program Manager \/ Technical Director)/i,
+    expect_company: /Smart Staffing Solutions/,
+    expect_description_excludes: [
+      "By clicking Continue to join or sign in",
+      "User Agreement",
+      "Cookie Policy",
+      "Privacy Policy",
+      "New to LinkedIn",
+      "View Alex",
+      "See their title, tenure",
+      "Experience & Education",
+      "*]:mb-0",
+      "text-[18px]",
+      "text-color-text",
+      "group-hover:underline",
+      "leading-[1.75]",
+      "[&>*]",
+      "font-semibold",
+      "not-first-middot",
+      "*** * ***",
+    ],
+    expect_technology_context_includes: [
+      "IoT",
       "Cloud",
     ],
   },
@@ -626,6 +703,173 @@ await runAiCase(
   } finally {
     __setLlmFetcherForTests(null);
   }
+}
+
+/* =====================================================================
+ * Final-gate / preview-detection assertions for the 2026-05 user report.
+ *
+ * Verifies that:
+ *   - parseLinkedInJobText (full pipeline) on the logged-out preview
+ *     paste returns NO chrome/CSS/asterisk garbage in any field.
+ *   - title fallback fires when Experience block is missing.
+ *   - technology_context includes >= 6 meaningful items including IoT,
+ *     Cloud/Azure, Big Data/Predictive Analytics, Program Management.
+ *   - sanitizeLinkedInShortField drops chrome values entirely.
+ *   - finalizeLinkedInResult synthesizes a clean description when given
+ *     a noisy one.
+ *   - looksLikeLoggedOutPreview returns true on the preview input.
+ * ===================================================================== */
+
+{
+  const out = parseLinkedInJobText(PROFILE_LOGGED_OUT_PREVIEW);
+  const blob = [
+    out.job_title,
+    out.company,
+    out.location,
+    out.job_description,
+    out.technology_context ?? "",
+  ].join("\n");
+  const forbiddenInAnyField = [
+    "By clicking Continue to join or sign in",
+    "Cookie Policy",
+    "User Agreement",
+    "*]:mb-0",
+    "text-[18px]",
+    "text-color-text",
+    "group-hover:underline",
+    "New to LinkedIn",
+    "[&>*]",
+    "leading-[1.75]",
+    "*** * ***",
+    "font-semibold",
+  ];
+  const finalChecks: Array<[string, boolean]> = [
+    ["title is nonblank", Boolean(out.job_title && out.job_title.trim())],
+    [
+      "title matches current/headline value",
+      /(Sr\.? Program Manager|Senior Program Manager|Sr\.? Technical Program Manager|Senior Program Manager \/ Technical Director|Senior Program Manager  Technical Director)/i.test(
+        out.job_title,
+      ),
+    ],
+    ["company is Smart Staffing Solutions", /Smart Staffing Solutions/i.test(out.company)],
+    ...forbiddenInAnyField.map(
+      (banned): [string, boolean] => [
+        `no field contains "${banned}"`,
+        !blob.toLowerCase().includes(banned.toLowerCase()),
+      ],
+    ),
+    [
+      "technology_context has 6+ items",
+      (out.technology_context ?? "").split(",").map((s) => s.trim()).filter(Boolean).length >= 6,
+    ],
+    [
+      "technology_context includes IoT",
+      /\bIoT\b/i.test(out.technology_context ?? ""),
+    ],
+    [
+      "technology_context includes Cloud or Azure",
+      /\b(Cloud|Azure)\b/i.test(out.technology_context ?? ""),
+    ],
+    [
+      "technology_context includes Big Data or Predictive Analytics",
+      /(Big Data|Predictive Analytics)/i.test(out.technology_context ?? ""),
+    ],
+    [
+      "technology_context includes Program Management or Technical Program Management",
+      /(Technical Program Management|Program Management)/i.test(out.technology_context ?? ""),
+    ],
+  ];
+  const ok = finalChecks.every(([, v]) => v);
+  console.log(`${ok ? "PASS" : "FAIL"}  Logged-out preview paste — no chrome/CSS in any field, title + tech populated`);
+  if (!ok) {
+    failed += 1;
+    for (const [label, v] of finalChecks) {
+      if (!v) console.log(`        FAIL  ${label}`);
+    }
+    console.log(`        title      : ${JSON.stringify(out.job_title)}`);
+    console.log(`        company    : ${JSON.stringify(out.company)}`);
+    console.log(`        location   : ${JSON.stringify(out.location)}`);
+    console.log(`        tech_ctx   : ${JSON.stringify((out.technology_context ?? "").slice(0, 280))}`);
+    console.log(`        desc[:280] : ${out.job_description.slice(0, 280).replace(/\n/g, " | ")}`);
+  }
+}
+
+{
+  const cases: Array<[string, () => boolean]> = [
+    [
+      "sanitizeLinkedInShortField drops CSS-class residue",
+      () =>
+        sanitizeLinkedInShortField('*]:mb-0 text-[18px] text-color-text leading-regular font-semibold">') === "",
+    ],
+    [
+      "sanitizeLinkedInShortField drops consent CTA phrase",
+      () =>
+        sanitizeLinkedInShortField(
+          "By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement",
+        ) === "",
+    ],
+    [
+      "sanitizeLinkedInShortField drops 'Experience & Education' section label",
+      () => sanitizeLinkedInShortField("Experience & Education") === "",
+    ],
+    [
+      "sanitizeLinkedInShortField drops Cookie Policy bare line",
+      () => sanitizeLinkedInShortField("Cookie Policy") === "",
+    ],
+    [
+      "sanitizeLinkedInShortField keeps a real title",
+      () => sanitizeLinkedInShortField("Sr. Program Manager") === "Sr. Program Manager",
+    ],
+  ];
+  for (const [name, check] of cases) {
+    const ok = check();
+    console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
+    if (!ok) failed += 1;
+  }
+}
+
+{
+  // finalizeLinkedInResult synthesizes a clean description when given
+  // an empty/noisy one but valid header fields.
+  const out = finalizeLinkedInResult(
+    {
+      job_title: "Sr. Program Manager",
+      company: "Smart Staffing Solutions",
+      location: "Corona, CA",
+      job_description:
+        "By clicking Continue to join or sign in, you agree to LinkedIn's User Agreement",
+      technology_context: "IoT, Cloud, Azure, Big Data, Program Management, Customer Experience",
+    },
+    "heuristic",
+  );
+  const ok =
+    out.job_title === "Sr. Program Manager" &&
+    out.company === "Smart Staffing Solutions" &&
+    out.job_description.length > 40 &&
+    !/cookie policy|user agreement|by clicking continue/i.test(out.job_description) &&
+    /Sr\.? Program Manager/i.test(out.job_description) &&
+    /Smart Staffing Solutions/i.test(out.job_description);
+  console.log(`${ok ? "PASS" : "FAIL"}  finalizeLinkedInResult synthesises a clean description from header fields`);
+  if (!ok) {
+    failed += 1;
+    console.log(`        got: ${JSON.stringify(out)}`);
+  }
+}
+
+{
+  // looksLikeLoggedOutPreview should be true for the logged-out paste
+  // when only a stub description was extracted.
+  const preview = looksLikeLoggedOutPreview(PROFILE_LOGGED_OUT_PREVIEW, {
+    source_engine: "heuristic",
+    job_title: "Sr. Program Manager",
+    company: "Smart Staffing Solutions",
+    location: "Ladera Ranch, California",
+    job_description: "LinkedIn profile summary / current role",
+    technology_context: "IoT, Cloud",
+  });
+  const ok = preview === true;
+  console.log(`${ok ? "PASS" : "FAIL"}  looksLikeLoggedOutPreview detects the user-reported preview paste`);
+  if (!ok) failed += 1;
 }
 
 if (failed > 0) {

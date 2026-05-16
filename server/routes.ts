@@ -37,6 +37,8 @@ import {
   prefillFromResumeText,
   parseLinkedInJobText,
   extractLinkedInJobWithAI,
+  finalizeLinkedInResult,
+  looksLikeLoggedOutPreview,
   toTitleCase,
 } from "./ai";
 import type { Analysis } from "@shared/schema";
@@ -690,6 +692,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // returns malformed output, so this call never throws.
     if (pasted) {
       const result = await extractLinkedInJobWithAI(pasted);
+      // Heuristic: did the paste look like a logged-out preview only?
+      // We flag a soft UI warning if no real Experience block was found
+      // and the description looks too thin to be useful.
+      const previewWarning = looksLikeLoggedOutPreview(pasted, result)
+        ? "This looks like LinkedIn's logged-out preview — open the full profile, expand About and Experience, then copy again for a richer import. We still extracted what we could."
+        : undefined;
       return res.json({
         source: "pasted",
         engine: result.source_engine,
@@ -703,6 +711,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           seniority: result.seniority ?? "",
         },
         ...(result.ai_error ? { ai_warning: "Used heuristic fallback for paste extraction." } : {}),
+        ...(previewWarning ? { warning: previewWarning } : {}),
       });
     }
 
@@ -795,17 +804,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // the paste path sees. The helper falls back to the heuristic
       // result on any failure.
       const enriched = await extractLinkedInJobWithAI(buf);
-      return res.json({
-        source: "fetch",
-        engine: enriched.source_engine,
-        parsed: {
+      // Final sanitization: every field gets the description / short-
+      // field cleaner once more before being returned.
+      const merged = finalizeLinkedInResult(
+        {
           job_title: enriched.job_title || fetched.job_title,
           company: enriched.company || fetched.company,
           location: enriched.location || fetched.location,
           job_description: enriched.job_description || fetched.job_description,
-          technology_context: enriched.technology_context ?? "",
-          employment_type: enriched.employment_type ?? "",
-          seniority: enriched.seniority ?? "",
+          technology_context: enriched.technology_context,
+          employment_type: enriched.employment_type,
+          seniority: enriched.seniority,
+        },
+        enriched.source_engine,
+      );
+      return res.json({
+        source: "fetch",
+        engine: merged.source_engine,
+        parsed: {
+          job_title: merged.job_title,
+          company: merged.company,
+          location: merged.location,
+          job_description: merged.job_description,
+          technology_context: merged.technology_context ?? "",
+          employment_type: merged.employment_type ?? "",
+          seniority: merged.seniority ?? "",
         },
       });
     } catch (err: any) {
