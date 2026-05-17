@@ -13,6 +13,7 @@ import Profile from "@/pages/Profile";
 import Admin from "@/pages/Admin";
 import Report from "@/pages/Report";
 import SignIn from "@/pages/SignIn";
+import Landing from "@/pages/Landing";
 import { AppLayout } from "@/components/AppLayout";
 import { useEffect } from "react";
 import { useMe } from "@/hooks/useMe";
@@ -135,16 +136,20 @@ function AppRouter() {
     return <AuthLoading />;
   }
 
-  // No session → always show the sign-in / create-account screen, no
-  // matter which hash route the URL claims. This guarantees protected
-  // pages cannot render with stale signed-in UI after sign-out.
+  // No session → show the public marketing landing page at `/` and the
+  // sign-in / create-account screen at `/signin`. Any other hash route
+  // gets normalized back to `/` so protected pages cannot render with
+  // stale signed-in UI after sign-out.
   if (!me) {
+    if (location === "/signin") {
+      return <SignIn />;
+    }
     if (location !== "/") {
       // Normalize the hash so the URL reflects the unauthenticated state.
       // Wrapped in a microtask so we don't update during render.
       queueMicrotask(() => setLocation("/"));
     }
-    return <SignIn />;
+    return <Landing />;
   }
 
   // The report page renders standalone (no sidebar, print-friendly).
