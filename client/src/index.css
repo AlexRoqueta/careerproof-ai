@@ -288,35 +288,108 @@
   }
   .print-card { box-shadow: none !important; border: none !important; }
   /* Visual report cards print as clean boxed sections instead of the
-   * dark glassy surface used on-screen. Keep borders for structure but
-   * drop the heavy gradient backgrounds and blurs. */
-  [data-testid="view-visual-report"] .grid-bg,
+   * dark glassy surface used on-screen. We strip *decorations* (gradient
+   * glow overlays, grid-bg fills, backdrop-filter blur, drop shadows)
+   * while keeping the cards themselves visible. Earlier versions of this
+   * file used `display: none` on `.backdrop-blur`, which incorrectly
+   * hid every section card in the print output. */
+  [data-testid="view-visual-report"] .grid-bg {
+    background-image: none !important;
+  }
+  /* Neutralize the backdrop-filter blur — `backdrop-blur` is a class
+   * applied to the visible cards themselves, not a separate overlay. */
   [data-testid="view-visual-report"] .backdrop-blur,
-  [data-testid="view-visual-report"] [aria-hidden="true"].absolute {
+  [data-testid="view-visual-report"] .backdrop-blur-sm,
+  [data-testid="view-visual-report"] .backdrop-blur-md {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  /* Hide purely-decorative absolute overlays (gradient glow, grid fill
+   * layer). Both are tagged with aria-hidden and positioned absolutely;
+   * the card content uses `relative` so it is unaffected. */
+  [data-testid="view-visual-report"] [aria-hidden="true"].absolute,
+  [data-testid="view-visual-report"] [aria-hidden="true"].pointer-events-none.absolute {
     display: none !important;
   }
   [data-testid="view-visual-report"] .shadow-2xl,
+  [data-testid="view-visual-report"] .shadow-xl,
   [data-testid="view-visual-report"] .shadow-md,
-  [data-testid="view-visual-report"] .shadow-lg {
+  [data-testid="view-visual-report"] .shadow-lg,
+  [data-testid="view-visual-report"] .shadow-sm,
+  [data-testid="view-visual-report"] .shadow {
     box-shadow: none !important;
   }
-  [data-testid="view-visual-report"] .bg-card\/85,
-  [data-testid="view-visual-report"] .bg-card\/60,
-  [data-testid="view-visual-report"] .bg-card\/40,
-  [data-testid="view-visual-report"] .bg-background\/40 {
-    background: white !important;
+  /* Card surfaces print on white so colored text on the dark glass
+   * surface stays legible. Cover bg-card, every common Tailwind alpha
+   * variant, bg-background/* and any tinted accent backgrounds the
+   * cards use (emerald/amber/cyan tints on inner pills). */
+  [data-testid="view-visual-report"] [class*="bg-card"],
+  [data-testid="view-visual-report"] [class*="bg-background"],
+  [data-testid="view-visual-report"] [class*="bg-emerald-500/"],
+  [data-testid="view-visual-report"] [class*="bg-amber-500/"],
+  [data-testid="view-visual-report"] [class*="bg-cyan-500/"],
+  [data-testid="view-visual-report"] [class*="bg-violet-500/"],
+  [data-testid="view-visual-report"] [class*="bg-rose-500/"],
+  [data-testid="view-visual-report"] [class*="bg-sky-500/"] {
+    background-color: white !important;
+    background-image: none !important;
   }
+  /* Bar fills (progress / weight indicators) and gradient buttons keep
+   * their gradients via print-color-adjust: exact set on html/body. */
   [data-testid="view-visual-report"] .text-cyan-300,
   [data-testid="view-visual-report"] .text-cyan-400,
+  [data-testid="view-visual-report"] .text-sky-300,
   [data-testid="view-visual-report"] .text-violet-300,
   [data-testid="view-visual-report"] .text-emerald-300,
   [data-testid="view-visual-report"] .text-amber-300,
-  [data-testid="view-visual-report"] .text-rose-300 {
+  [data-testid="view-visual-report"] .text-rose-300,
+  [data-testid="view-visual-report"] .text-foreground\/85,
+  [data-testid="view-visual-report"] .text-foreground\/90 {
     color: black !important;
   }
   /* Force two-column grid back to single column for predictable PDFs. */
   [data-testid="view-visual-report"] .lg\:grid-cols-12 > * {
     grid-column: span 12 / span 12 !important;
+  }
+  /* Multi-page print: ensure cards & rows are not split mid-element, and
+   * the disclaimer / footer note stay together. */
+  [data-testid="view-visual-report"] .shadcn-card,
+  [data-testid="view-visual-report"] [data-testid^="row-"],
+  [data-testid="view-visual-report"] [data-testid^="card-"],
+  [data-testid="view-visual-report"] [data-testid="report-hero"] {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  [data-testid="view-visual-report"] h2,
+  [data-testid="view-visual-report"] h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  [data-testid="view-visual-report"] {
+    /* Restore vertical spacing space-y-4 collapses awkwardly when the
+     * print engine has stripped backgrounds. Give each card a small
+     * top margin so they breathe across page breaks. */
+    display: block !important;
+  }
+  [data-testid="view-visual-report"] > * {
+    margin-top: 16px;
+  }
+  [data-testid="view-visual-report"] > *:first-child {
+    margin-top: 0;
+  }
+  /* Locked overlay: hide the "Body locked" pill in print so it can't
+   * cover the (already blurred) content underneath. The blur on the
+   * locked body comes from prose-app-locked, which is preserved. */
+  [data-testid="view-visual-report"] [data-testid="locked-overlay"] {
+    display: none !important;
+  }
+  /* Standalone /report page wrapper — set min-height to auto so it
+   * doesn't force a full viewport-height blank first page. */
+  .min-h-screen {
+    min-height: 0 !important;
+  }
+  article {
+    padding-top: 0 !important;
   }
   .prose-app {
     font-size: 11pt !important;
