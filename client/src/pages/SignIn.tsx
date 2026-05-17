@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,27 @@ import type { User } from "@shared/schema";
  * and this screen transitions into a one-time "set a password" panel.
  */
 export default function SignIn() {
+  // wouter is mounted with the hash-location hook in App.tsx, so this
+  // setLocation manipulates the hash route. We call it explicitly after
+  // every successful auth mutation so the URL leaves "/signin" and the
+  // authenticated shell mounts the Analyze dashboard — the SignIn page
+  // must NOT rely solely on the AppRouter guard to redirect, because if
+  // the location stays on "/signin" the signed-in branch falls through
+  // to ShellRoutes' NotFound. This is the "404 after login" fix.
+  const [, navigate] = useLocation();
+  const goToDashboard = () => {
+    try {
+      navigate("/");
+    } catch {
+      // Belt-and-suspenders: even if wouter throws (e.g. during teardown
+      // of the SignIn tree) the hard hash assignment will trigger the
+      // hashchange listener and AppRouter will re-evaluate.
+    }
+    if (typeof window !== "undefined" && window.location.hash !== "#/") {
+      window.location.hash = "#/";
+    }
+  };
+
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [signInEmail, setSignInEmail] = useState("");
   const [signInPassword, setSignInPassword] = useState("");
@@ -70,6 +92,7 @@ export default function SignIn() {
       setError(null);
       setSignInPassword("");
       await queryClient.invalidateQueries();
+      goToDashboard();
     },
     onError: (e: Error) => {
       const parsed = parseApiError(e);
@@ -99,6 +122,7 @@ export default function SignIn() {
       setSignUpPassword("");
       setSignUpConfirm("");
       await queryClient.invalidateQueries();
+      goToDashboard();
     },
     onError: (e: Error) => setError(parseApiError(e).message),
   });
@@ -140,6 +164,7 @@ export default function SignIn() {
       setResetNotice(null);
       setPreviewCode(null);
       await queryClient.invalidateQueries();
+      goToDashboard();
     },
     onError: (e: Error) => setError(parseApiError(e).message),
   });
@@ -169,6 +194,7 @@ export default function SignIn() {
       setSetupPassword("");
       setSetupConfirm("");
       await queryClient.invalidateQueries();
+      goToDashboard();
     },
     onError: (e: Error) => setError(parseApiError(e).message),
   });

@@ -38,6 +38,14 @@ function ShellRoutes() {
     <AppLayout>
       <Switch>
         <Route path="/" component={Analyze} />
+        {/* Fail-safe aliases: when a signed-in user lands on an auth-only
+         * route (because the SignIn redirect didn't fire, the browser
+         * restored the URL, etc.) we still render the Analyze dashboard
+         * instead of falling through to NotFound. */}
+        <Route path="/analyze" component={Analyze} />
+        <Route path="/signin" component={Analyze} />
+        <Route path="/login" component={Analyze} />
+        <Route path="/signup" component={Analyze} />
         <Route path="/history" component={History} />
         <Route path="/resumes" component={Resumes} />
         <Route path="/credits" component={Credits} />
@@ -48,6 +56,13 @@ function ShellRoutes() {
     </AppLayout>
   );
 }
+
+/* Routes that exist only for unauthenticated visitors. When a signed-in
+ * user is sitting on one of these (e.g. because they were on /signin
+ * when the session was established and the URL never moved), we rewrite
+ * the hash so wouter matches /. This is the primary fail-safe against
+ * the "404 after login" bug. */
+const AUTH_ONLY_PATHS = new Set(["/signin", "/login", "/signup"]);
 
 function AuthLoading() {
   return (
@@ -150,6 +165,15 @@ function AppRouter() {
       queueMicrotask(() => setLocation("/"));
     }
     return <Landing />;
+  }
+
+  // Signed in but URL is still on an auth-only screen — rewrite to "/"
+  // so the dashboard mounts. This is the second fail-safe (in addition
+  // to the SignIn mutation success handlers calling setLocation("/"))
+  // against the "404 after login" bug.
+  if (AUTH_ONLY_PATHS.has(location)) {
+    queueMicrotask(() => setLocation("/"));
+    return <AuthLoading />;
   }
 
   // The report page renders standalone (no sidebar, print-friendly).
