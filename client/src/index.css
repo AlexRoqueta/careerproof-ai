@@ -287,6 +287,37 @@
     color: black !important;
   }
   .print-card { box-shadow: none !important; border: none !important; }
+  /* Visual report cards print as clean boxed sections instead of the
+   * dark glassy surface used on-screen. Keep borders for structure but
+   * drop the heavy gradient backgrounds and blurs. */
+  [data-testid="view-visual-report"] .grid-bg,
+  [data-testid="view-visual-report"] .backdrop-blur,
+  [data-testid="view-visual-report"] [aria-hidden="true"].absolute {
+    display: none !important;
+  }
+  [data-testid="view-visual-report"] .shadow-2xl,
+  [data-testid="view-visual-report"] .shadow-md,
+  [data-testid="view-visual-report"] .shadow-lg {
+    box-shadow: none !important;
+  }
+  [data-testid="view-visual-report"] .bg-card\/85,
+  [data-testid="view-visual-report"] .bg-card\/60,
+  [data-testid="view-visual-report"] .bg-card\/40,
+  [data-testid="view-visual-report"] .bg-background\/40 {
+    background: white !important;
+  }
+  [data-testid="view-visual-report"] .text-cyan-300,
+  [data-testid="view-visual-report"] .text-cyan-400,
+  [data-testid="view-visual-report"] .text-violet-300,
+  [data-testid="view-visual-report"] .text-emerald-300,
+  [data-testid="view-visual-report"] .text-amber-300,
+  [data-testid="view-visual-report"] .text-rose-300 {
+    color: black !important;
+  }
+  /* Force two-column grid back to single column for predictable PDFs. */
+  [data-testid="view-visual-report"] .lg\:grid-cols-12 > * {
+    grid-column: span 12 / span 12 !important;
+  }
   .prose-app {
     font-size: 11pt !important;
     line-height: 1.55 !important;
