@@ -18,9 +18,12 @@ export function BuyCreditsModal({ open, onOpenChange }: Props) {
           </div>
           <DialogTitle>You're out of credits</DialogTitle>
           <DialogDescription>
-            Each AI assessment uses one credit. Top up to keep analyzing — start at just $5 for a 3-credit pack.
+            Each AI assessment uses one credit. Top up to keep analyzing — start at just $3 for a single report.
           </DialogDescription>
         </DialogHeader>
+        <div className="text-xs text-muted-foreground -mt-2 mb-2">
+          No subscription required · One credit = one full report · Secure checkout powered by Stripe.
+        </div>
         <div className="flex gap-2 justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-buy">
             Not now

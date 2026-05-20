@@ -29,6 +29,7 @@ import {
   formatPrice,
 } from "@shared/entitlements";
 import type { CreditTransaction } from "@shared/schema";
+import { track, EVENTS } from "@/lib/analytics";
 
 /* =====================================================================
  * Credits page \u2014 provider-agnostic purchase, promo redemption, history
@@ -152,14 +153,22 @@ export default function Credits() {
       if (data.pending) {
         setCompletionStatus({ kind: "pending", provider: data.provider ?? "stripe" });
       } else {
+        const credits =
+          data.credits_added > 0 ? data.credits_added : data.package?.credits ?? 0;
         setCompletionStatus({
           kind: "success",
-          credits:
-            data.credits_added > 0
-              ? data.credits_added
-              : data.package?.credits ?? 0,
+          credits,
           already: data.already_processed,
         });
+        if (!data.already_processed) {
+          track(EVENTS.checkout_success, {
+            provider: data.provider ?? "preview",
+            credits_added: credits,
+            package_id: data.package?.id,
+            value: data.package ? data.package.price_cents / 100 : undefined,
+            currency: data.package?.currency ?? "USD",
+          });
+        }
         if (data.already_processed) {
           setPendingStripeSession(null);
         }
@@ -249,12 +258,22 @@ export default function Credits() {
     const match = txs.find((t) => t.reference === ref && t.reason === "purchase");
     if (match) {
       setCompletionStatus({ kind: "success", credits: match.amount_delta, already: false });
+      track(EVENTS.checkout_success, {
+        provider: "stripe",
+        credits_added: match.amount_delta,
+      });
       setPendingStripeSession(null);
     }
   }, [pendingStripeSession, transactionsQuery.data]);
 
   const checkout = useMutation({
     mutationFn: async (pkg: CreditPackage) => {
+      track(EVENTS.checkout_started, {
+        package_id: pkg.id,
+        credits: pkg.credits,
+        value: pkg.price_cents / 100,
+        currency: pkg.currency || "USD",
+      });
       const res = await apiRequest("POST", "/api/payments/create-checkout", {
         package_id: pkg.id,
       });
@@ -415,6 +434,11 @@ export default function Credits() {
         </Alert>
       )}
 
+      <p className="text-xs text-muted-foreground" data-testid="text-trust">
+        No subscription required · One credit = one full report · Secure checkout powered by Stripe ·
+        Directional career-risk insight, not a guarantee.
+      </p>
+
       {/* Packages grid */}
       <div className="grid md:grid-cols-3 gap-4" data-testid="grid-packages">
         {packagesQuery.isLoading && (
@@ -470,7 +494,14 @@ export default function Credits() {
               </ul>
               <Button
                 className="w-full"
-                onClick={() => checkout.mutate(pkg)}
+                onClick={() => {
+                  track(EVENTS.buy_credits_clicked, {
+                    source: "credits_page",
+                    package_id: pkg.id,
+                    credits: pkg.credits,
+                  });
+                  checkout.mutate(pkg);
+                }}
                 disabled={checkout.isPending}
                 variant={pkg.popular ? "default" : "outline"}
                 data-testid={`button-buy-${pkg.id}`}

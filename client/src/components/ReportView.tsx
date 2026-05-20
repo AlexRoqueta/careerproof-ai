@@ -4,7 +4,7 @@ import { Download, Share2, Lock, Sparkles, Loader2 } from "lucide-react";
 import type { Analysis } from "@shared/schema";
 import { formatDateTime, toTitleCase } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ShareModal } from "./ShareModal";
 import { BuyCreditsModal } from "./BuyCreditsModal";
 import { useMutation } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMe } from "@/hooks/useMe";
 import { hasUnlimitedCredits } from "@shared/entitlements";
 import { VisualReport } from "./VisualReport";
+import { track, EVENTS } from "@/lib/analytics";
 
 interface Props {
   analysis: Analysis;
@@ -55,6 +56,14 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
   });
 
   const isLocked = Boolean(analysis.is_locked);
+
+  useEffect(() => {
+    track(EVENTS.report_viewed, {
+      analysis_id: analysis.id,
+      locked: isLocked,
+      risk_score: analysis.risk_score,
+    });
+  }, [analysis.id, isLocked, analysis.risk_score]);
 
   const exportPdf = () => {
     window.open(`#/report/${analysis.id}`, "_blank");
@@ -142,7 +151,10 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                 ) : (
                   <Button
                     size="sm"
-                    onClick={() => setBuyOpen(true)}
+                    onClick={() => {
+                      track(EVENTS.buy_credits_clicked, { source: "locked_report" });
+                      setBuyOpen(true);
+                    }}
                     data-testid="button-buy-credits-unlock"
                   >
                     <Sparkles className="w-3.5 h-3.5 mr-1.5" />
@@ -156,6 +168,40 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
       )}
 
       <VisualReport analysis={analysis} locked={isLocked} />
+
+      {!isLocked && !unlimited && (
+        <Card
+          className="border-cyan-400/30 bg-gradient-to-br from-cyan-500/10 via-sky-500/10 to-violet-500/10 p-4 rounded-2xl"
+          data-testid="banner-upsell"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+            <div className="flex items-start gap-3 flex-1">
+              <Sparkles className="w-5 h-5 text-cyan-300 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  Want to compare another role?
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Buy 1 more report for just $3. No subscription — one credit = one full report.
+                  Secure checkout powered by Stripe.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                track(EVENTS.buy_credits_clicked, { source: "post_report_upsell" });
+                setBuyOpen(true);
+              }}
+              data-testid="button-upsell-buy"
+              className="shrink-0"
+            >
+              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+              Buy another report
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <ShareModal
         open={shareOpen}

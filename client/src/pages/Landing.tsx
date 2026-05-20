@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Logo } from "@/components/Logo";
+import { track, EVENTS } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -35,7 +36,12 @@ import {
 export default function Landing() {
   const [, setLocation] = useLocation();
 
-  function goStart() {
+  useEffect(() => {
+    track(EVENTS.landing_view);
+  }, []);
+
+  function goStart(source: string = "unknown") {
+    track(EVENTS.landing_cta_click, { source });
     setLocation("/signin");
     // Scroll to top so the SignIn screen lands at the top of the viewport
     // on small screens where the landing page may have been scrolled deep.
@@ -50,8 +56,8 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-background text-foreground antialiased overflow-x-hidden">
       <BackgroundAurora />
-      <NavBar onStart={goStart} />
-      <Hero onStart={goStart} onHow={goHow} />
+      <NavBar onStart={() => goStart("nav")} />
+      <Hero onStart={() => goStart("hero")} onHow={goHow} />
       <ProblemSection />
       <HowItWorks />
       <Benefits />
@@ -59,7 +65,7 @@ export default function Landing() {
       <SampleReport />
       <TrustSafety />
       <FAQSection />
-      <FinalCTA onStart={goStart} />
+      <FinalCTA onStart={() => goStart("final_cta")} />
       <Footer />
     </div>
   );
@@ -546,6 +552,20 @@ function SampleReport() {
               </li>
             ))}
           </ul>
+          <div className="mt-6">
+            <a
+              href="#/sample-report"
+              onClick={() => track(EVENTS.landing_cta_click, { source: "sample_report_link" })}
+              className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-200 hover:bg-cyan-500/15 transition-colors"
+              data-testid="link-sample-report"
+            >
+              See a sample AI Exposure Report
+              <ArrowRight className="h-4 w-4" />
+            </a>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Sample report. Directional career-risk insight, not a guarantee.
+            </p>
+          </div>
         </div>
         <div className="lg:col-span-7">
           <SampleReportCard />
@@ -774,6 +794,10 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
                 Start my AI risk check <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
+            <p className="mt-5 text-xs text-muted-foreground max-w-2xl mx-auto">
+              No subscription required · One credit = one full report · Secure checkout powered by Stripe ·
+              Directional career-risk insight, not a guarantee.
+            </p>
           </div>
         </div>
       </div>

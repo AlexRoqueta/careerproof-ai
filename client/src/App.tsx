@@ -14,6 +14,7 @@ import Admin from "@/pages/Admin";
 import Report from "@/pages/Report";
 import SignIn from "@/pages/SignIn";
 import Landing from "@/pages/Landing";
+import SampleReport from "@/pages/SampleReport";
 import { AppLayout } from "@/components/AppLayout";
 import { useEffect } from "react";
 import { useMe } from "@/hooks/useMe";
@@ -51,6 +52,7 @@ function ShellRoutes() {
         <Route path="/credits" component={Credits} />
         <Route path="/profile" component={Profile} />
         <Route path="/admin" component={Admin} />
+        <Route path="/sample-report" component={SampleReport} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
@@ -152,12 +154,17 @@ function AppRouter() {
   }
 
   // No session → show the public marketing landing page at `/` and the
-  // sign-in / create-account screen at `/signin`. Any other hash route
-  // gets normalized back to `/` so protected pages cannot render with
-  // stale signed-in UI after sign-out.
+  // sign-in / create-account screen at `/signin`. The sample report is
+  // also reachable without a session so prospective users can see what
+  // the product produces before signing up. Any other hash route gets
+  // normalized back to `/` so protected pages cannot render with stale
+  // signed-in UI after sign-out.
   if (!me) {
     if (location === "/signin") {
       return <SignIn />;
+    }
+    if (location === "/sample-report") {
+      return <SampleReport />;
     }
     if (location !== "/") {
       // Normalize the hash so the URL reflects the unauthenticated state.

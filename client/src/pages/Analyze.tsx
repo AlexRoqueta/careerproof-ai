@@ -39,6 +39,7 @@ import { hasUnlimitedCredits } from "@shared/entitlements";
 import { ReportView } from "@/components/ReportView";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { track, EVENTS } from "@/lib/analytics";
 
 const ACCEPTED_TYPES = [
   "application/pdf",
@@ -158,12 +159,14 @@ export default function Analyze() {
 
   const autofillMutation = useMutation({
     mutationFn: async () => {
+      track(EVENTS.ai_autofill_started);
       const res = await apiRequest("POST", "/api/autofill", { job_title: jobTitle });
       return res.json() as Promise<{ job_description: string; technology_context: string }>;
     },
     onSuccess: (data) => {
       setJobDescription(data.job_description);
       setTechContext(data.technology_context);
+      track(EVENTS.ai_autofill_completed);
       toast({ title: "Fields auto-filled", description: "Review and refine before generating." });
       scrollToField("job_description", { focus: true });
     },
@@ -190,6 +193,7 @@ export default function Analyze() {
     mutationFn: async () => {
       const url = linkedinUrl.trim();
       const pasted_text = linkedinPasted.trim();
+      track(EVENTS.linkedin_import_started, { has_url: Boolean(url), has_text: Boolean(pasted_text) });
       const res = await apiRequest("POST", "/api/linkedin/import", {
         url: url || undefined,
         pasted_text: pasted_text || undefined,
@@ -197,6 +201,7 @@ export default function Analyze() {
       return res.json() as Promise<LinkedInImportResponse>;
     },
     onSuccess: (data) => {
+      track(EVENTS.linkedin_import_completed, { source: data.source, engine: data.engine ?? "n/a" });
       setLinkedinWarning(data.warning ?? null);
       const { parsed, source, warning, engine } = data;
       if (parsed.job_title) setJobTitle(parsed.job_title);
@@ -289,6 +294,7 @@ export default function Analyze() {
       ]);
       queryClient.invalidateQueries({ queryKey: ["/api/resumes"] });
       setResumeTab("existing");
+      track(EVENTS.resume_uploaded, { size_bytes: resume.size_bytes });
       toast({
         title: "Resume uploaded",
         description: `${resume.filename} is selected and will be used to pre-fill the role details.`,
@@ -307,6 +313,7 @@ export default function Analyze() {
     mutationFn: async () => {
       const controller = new AbortController();
       abortRef.current = controller;
+      track(EVENTS.analysis_started, { has_resume: resumeId != null });
       const res = await fetch(apiUrl("/api/analyses"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -324,6 +331,12 @@ export default function Analyze() {
     },
     onSuccess: async (a) => {
       setResultAnalysis(a);
+      track(EVENTS.analysis_completed, {
+        analysis_id: a.id,
+        risk_score: a.risk_score,
+        automation_risk: a.automation_risk,
+        locked: Boolean(a.is_locked),
+      });
       await queryClient.invalidateQueries({ queryKey: ["/api/me"] });
       await queryClient.invalidateQueries({ queryKey: ["/api/analyses"] });
     },
@@ -480,7 +493,19 @@ export default function Analyze() {
             type="single"
             collapsible
             value={openPanel}
-            onValueChange={(v) => setOpenPanel((v as PanelId) || "")}
+            onValueChange={(v) => {
+              const panel = (v as PanelId) || "";
+              if (panel) {
+                const method =
+                  panel === "resume"
+                    ? "resume_upload"
+                    : panel === "linkedin"
+                    ? "linkedin_import"
+                    : "manual_entry";
+                track(EVENTS.input_method_selected, { method });
+              }
+              setOpenPanel(panel);
+            }}
             className="w-full"
           >
             {/* 1. Resume upload */}
@@ -848,7 +873,10 @@ export default function Analyze() {
                 stays blurred until you{" "}
                 <button
                   className="underline underline-offset-2 font-medium"
-                  onClick={() => setShowBuy(true)}
+                  onClick={() => {
+                    track(EVENTS.buy_credits_clicked, { source: "analyze_alert" });
+                    setShowBuy(true);
+                  }}
                   data-testid="link-buy-credits"
                 >
                   buy credits

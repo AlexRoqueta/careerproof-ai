@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Logo } from "@/components/Logo";
 import { Loader2, LogIn, UserPlus, ArrowRight, KeyRound, MailQuestion, ShieldCheck } from "lucide-react";
 import type { User } from "@shared/schema";
+import { track, identify, EVENTS } from "@/lib/analytics";
 
 /**
  * Unauthenticated landing screen. Shown whenever /api/me returns 401
@@ -88,9 +89,11 @@ export default function SignIn() {
       const res = await apiRequest("POST", "/api/me/signin", input);
       return (await res.json()) as User;
     },
-    onSuccess: async () => {
+    onSuccess: async (user) => {
       setError(null);
       setSignInPassword("");
+      if (user?.id != null) identify(user.id);
+      track(EVENTS.signin_completed);
       await queryClient.invalidateQueries();
       goToDashboard();
     },
@@ -114,13 +117,16 @@ export default function SignIn() {
       password: string;
       confirm_password: string;
     }) => {
+      track(EVENTS.signup_started);
       const res = await apiRequest("POST", "/api/me/signup", input);
       return (await res.json()) as User;
     },
-    onSuccess: async () => {
+    onSuccess: async (user) => {
       setError(null);
       setSignUpPassword("");
       setSignUpConfirm("");
+      if (user?.id != null) identify(user.id);
+      track(EVENTS.signup_completed);
       await queryClient.invalidateQueries();
       goToDashboard();
     },
