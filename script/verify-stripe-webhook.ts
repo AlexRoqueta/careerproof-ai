@@ -55,6 +55,7 @@ process.env.STRIPE_WEBHOOK_SECRET = `whsec_test_${randomBytes(16).toString("hex"
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
+const { createSessionMiddleware } = await import("../server/session");
 const storageMod = await import("../server/storage");
 await storageMod.initStorage();
 const { storage } = storageMod;
@@ -72,6 +73,7 @@ app.use(
     },
   }),
 );
+app.use(createSessionMiddleware());
 const httpServer = createServer(app);
 await registerRoutes(httpServer, app);
 

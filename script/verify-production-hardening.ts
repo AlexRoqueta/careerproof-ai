@@ -61,6 +61,7 @@ process.env.NODE_ENV = "development";
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
+const { createSessionMiddleware } = await import("../server/session");
 const storageMod = await import("../server/storage");
 await storageMod.initStorage();
 const { storage } = storageMod;
@@ -69,6 +70,7 @@ const { __resetRateLimits } = await import("../server/rate-limit");
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
+app.use(createSessionMiddleware());
 const httpServer = createServer(app);
 await registerRoutes(httpServer, app);
 
@@ -76,7 +78,26 @@ const PORT = 4801;
 await new Promise<void>((resolve) => httpServer.listen(PORT, resolve));
 
 const base = `http://127.0.0.1:${PORT}`;
-let cookieJar = "";
+const cookieStore = new Map<string, string>();
+function applySetCookie(setCookie: string[] | null) {
+  if (!setCookie) return;
+  for (const sc of setCookie) {
+    const [pair] = sc.split(";");
+    const eq = pair.indexOf("=");
+    if (eq < 0) continue;
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (value === "" || /expires=thu, 01 jan 1970/i.test(sc)) {
+      cookieStore.delete(name);
+    } else {
+      cookieStore.set(name, value);
+    }
+  }
+}
+function cookieHeader(): string | undefined {
+  if (cookieStore.size === 0) return undefined;
+  return [...cookieStore.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+}
 
 async function request(
   method: string,
@@ -86,12 +107,21 @@ async function request(
 ): Promise<{ status: number; json: any; headers: Headers }> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (cookieJar) headers["Cookie"] = cookieJar;
+  const cookie = cookieHeader();
+  if (cookie) headers["Cookie"] = cookie;
   const res = await fetch(`${base}${path}`, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const setCookie =
+    typeof (res.headers as any).getSetCookie === "function"
+      ? (res.headers as any).getSetCookie()
+      : (() => {
+          const h = res.headers.get("set-cookie");
+          return h ? [h] : null;
+        })();
+  applySetCookie(setCookie);
   const text = await res.text();
   let json: any = null;
   try {
@@ -335,6 +365,7 @@ try {
   const routesProd = await import("../server/routes?prod=1");
   const appProd = express();
   appProd.use(express.json({ limit: "20mb" }));
+  appProd.use(createSessionMiddleware());
   const httpProd = createServer(appProd);
   await routesProd.registerRoutes(httpProd, appProd);
   const PROD_PORT = 4802;
@@ -378,6 +409,7 @@ try {
   const routesProdOptIn = await import("../server/routes?prod=optin");
   const appOptIn = express();
   appOptIn.use(express.json({ limit: "20mb" }));
+  appOptIn.use(createSessionMiddleware());
   const httpOptIn = createServer(appOptIn);
   await routesProdOptIn.registerRoutes(httpOptIn, appOptIn);
   const OPTIN_PORT = 4803;

@@ -20,6 +20,11 @@ export async function apiRequest(
     headers: data ? { "Content-Type": "application/json" } : {},
     body: data ? JSON.stringify(data) : undefined,
     signal,
+    // Send the session cookie on every API call so the server can
+    // identify the calling browser. Without this, express-session
+    // sees an anonymous request on each call and the per-client
+    // session never settles.
+    credentials: "include",
   });
 
   await throwIfResNotOk(res);
@@ -36,7 +41,9 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`);
+    const res = await fetch(`${API_BASE}${queryKey.join("/")}`, {
+      credentials: "include",
+    });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

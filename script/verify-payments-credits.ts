@@ -50,6 +50,7 @@ process.chdir(tmpDir);
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
+const { createSessionMiddleware } = await import("../server/session");
 const storageMod = await import("../server/storage");
 await storageMod.initStorage();
 const { storage, _setAnalysisLockedForTest } = storageMod;
@@ -57,24 +58,61 @@ const { hashPassword } = await import("../server/password");
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
+app.use(createSessionMiddleware());
 const httpServer = createServer(app);
 await registerRoutes(httpServer, app);
 
-const PORT = 4811;
+const PORT = 4812;
 await new Promise<void>((resolve) => httpServer.listen(PORT, resolve));
 
 const base = `http://127.0.0.1:${PORT}`;
+
+/* Single shared cookie jar. The script switches identities via the
+ * standard logout → signin/signup flow, which destroys the previous
+ * session record before establishing a new one. */
+const cookieStore = new Map<string, string>();
+function applySetCookie(setCookie: string[] | null) {
+  if (!setCookie) return;
+  for (const sc of setCookie) {
+    const [pair] = sc.split(";");
+    const eq = pair.indexOf("=");
+    if (eq < 0) continue;
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (value === "" || /expires=thu, 01 jan 1970/i.test(sc)) {
+      cookieStore.delete(name);
+    } else {
+      cookieStore.set(name, value);
+    }
+  }
+}
+function cookieHeader(): string | undefined {
+  if (cookieStore.size === 0) return undefined;
+  return [...cookieStore.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+}
 
 async function request(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<{ status: number; json: any }> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const cookie = cookieHeader();
+  if (cookie) headers["Cookie"] = cookie;
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const setCookie =
+    typeof (res.headers as any).getSetCookie === "function"
+      ? (res.headers as any).getSetCookie()
+      : (() => {
+          const h = res.headers.get("set-cookie");
+          return h ? [h] : null;
+        })();
+  applySetCookie(setCookie);
   const text = await res.text();
   let json: any = null;
   try {
@@ -141,7 +179,14 @@ try {
     password: buyerPassword,
     confirm_password: buyerPassword,
   });
-  assert(signup.status === 200 && signup.json?.credits === 0, "buyer signs up with 0 credits");
+  assert(
+    signup.status === 200 && signup.json?.credits === 1,
+    "buyer signs up with 1 welcome credit",
+    signup,
+  );
+  // Drain the welcome credit directly so the rest of this script
+  // verifies the from-zero purchase / promo / unlock flows.
+  await storage.setUserCredits(signup.json.id, 0);
 
   const cco = await request("POST", "/api/payments/create-checkout", {
     package_id: "standard_3",
@@ -220,12 +265,15 @@ try {
   const promoEmail = `verify_promo_${stamp}@example.com`;
   const promoPassword = "PromoVerify1!";
   await request("POST", "/api/me/logout");
-  await request("POST", "/api/me/signup", {
+  const promoSignup = await request("POST", "/api/me/signup", {
     full_name: "Verify Promo",
     email: promoEmail,
     password: promoPassword,
     confirm_password: promoPassword,
   });
+  // Drain the welcome credit so the +10 promo lands on a 0 base, matching
+  // the original test's "balance is exactly 10" expectation.
+  await storage.setUserCredits(promoSignup.json.id, 0);
   // Mixed-case input is accepted.
   const redeemMixed = await request("POST", "/api/credits/redeem-code", { code: " 10Free " });
   assert(
@@ -270,12 +318,15 @@ try {
   const lockedEmail = `verify_locked_${stamp}@example.com`;
   const lockedPassword = "LockedVerify1!";
   await request("POST", "/api/me/logout");
-  await request("POST", "/api/me/signup", {
+  const lockedSignup = await request("POST", "/api/me/signup", {
     full_name: "Verify Locked",
     email: lockedEmail,
     password: lockedPassword,
     confirm_password: lockedPassword,
   });
+  // Drain the welcome credit so the analysis is created locked (the
+  // assertion that follows requires zero credits at creation time).
+  await storage.setUserCredits(lockedSignup.json.id, 0);
   const analyzed = await request("POST", "/api/analyses", {
     job_title: "Heart Surgeon",
     job_description:

@@ -39,12 +39,14 @@ process.chdir(tmpDir);
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
+const { createSessionMiddleware } = await import("../server/session");
 const storageMod = await import("../server/storage");
 await storageMod.initStorage();
 const { storage } = storageMod;
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
+app.use(createSessionMiddleware());
 const httpServer = createServer(app);
 await registerRoutes(httpServer, app);
 
@@ -52,18 +54,50 @@ const PORT = 4799;
 await new Promise<void>((resolve) => httpServer.listen(PORT, resolve));
 
 const base = `http://127.0.0.1:${PORT}`;
-const jar: { cookie?: string } = {};
+
+const cookieStore = new Map<string, string>();
+function applySetCookie(setCookie: string[] | null) {
+  if (!setCookie) return;
+  for (const sc of setCookie) {
+    const [pair] = sc.split(";");
+    const eq = pair.indexOf("=");
+    if (eq < 0) continue;
+    const name = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (value === "" || /expires=thu, 01 jan 1970/i.test(sc)) {
+      cookieStore.delete(name);
+    } else {
+      cookieStore.set(name, value);
+    }
+  }
+}
+function cookieHeader(): string | undefined {
+  if (cookieStore.size === 0) return undefined;
+  return [...cookieStore.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+}
 
 async function request(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<{ status: number; json: any }> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const cookie = cookieHeader();
+  if (cookie) headers["Cookie"] = cookie;
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  const setCookie =
+    typeof (res.headers as any).getSetCookie === "function"
+      ? (res.headers as any).getSetCookie()
+      : (() => {
+          const h = res.headers.get("set-cookie");
+          return h ? [h] : null;
+        })();
+  applySetCookie(setCookie);
   const text = await res.text();
   let json: any = null;
   try {
@@ -116,7 +150,7 @@ const SEEDED_OWNER_PASSWORD = "Preview2025!";
 const NEW_USER_PASSWORD = "VerifyTest1!";
 
 try {
-  /* -------- 1. Signup with a brand-new email -> zero credits -------- */
+  /* -------- 1. Signup with a brand-new email -> welcome credit + drain to zero -------- */
   const signup = await request("POST", "/api/me/signup", {
     full_name: "Verify Locked",
     email: newEmail,
@@ -125,15 +159,20 @@ try {
   });
   assert(signup.status === 200, "signup new account returns 200", signup);
   assert(
-    signup.json?.credits === 0,
-    "new account starts with 0 credits (not 3, not unlimited by default)",
+    signup.json?.credits === 1,
+    "new account starts with 1 welcome credit (signup_bonus)",
     signup.json,
   );
   assert(signup.json?.role === "user", "new account role is 'user'");
 
+  // The rest of this script verifies zero-credit behavior: drain the
+  // welcome credit directly via storage so the existing assertions
+  // about locked reports remain meaningful.
+  await storage.setUserCredits(signup.json.id, 0);
+
   const me = await request("GET", "/api/me");
   assert(me.json?.email === newEmail, "session points at the new user");
-  assert(me.json?.credits === 0, "GET /api/me still reports 0 credits");
+  assert(me.json?.credits === 0, "GET /api/me reports 0 credits after draining welcome credit");
 
   /* -------- 2. Zero-credit analysis: succeeds, comes back locked, body redacted -------- */
   const analyze = await request("POST", "/api/analyses", {

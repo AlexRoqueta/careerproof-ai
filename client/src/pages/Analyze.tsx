@@ -308,6 +308,7 @@ export default function Analyze() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
+        credentials: "include",
         body: JSON.stringify({
           job_title: jobTitle,
           job_description: jobDescription,

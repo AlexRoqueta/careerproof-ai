@@ -38,6 +38,7 @@ process.env.NODE_ENV = "production";
 const { default: express } = await import("express");
 const { createServer } = await import("node:http");
 const { registerRoutes } = await import("../server/routes");
+const { createSessionMiddleware } = await import("../server/session");
 const storageMod = await import("../server/storage");
 await storageMod.initStorage();
 
@@ -53,6 +54,7 @@ writeFileSync(join(publicDir, "index.html"), indexHtml);
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
+app.use(createSessionMiddleware());
 const httpServer = createServer(app);
 await registerRoutes(httpServer, app);
 

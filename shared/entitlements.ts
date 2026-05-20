@@ -6,6 +6,12 @@ export const UNLIMITED_CREDIT_EMAILS = ["roqueta.alex@gmail.com"];
 export const FREE_CREDITS_PROMO_CODE = "10FREE";
 export const FREE_CREDITS_PROMO_AMOUNT = 10;
 
+/* Welcome bonus granted at signup. New accounts get exactly this many
+ * credits so the first analysis can be unlocked without a purchase.
+ * Existing users are unaffected — the grant happens once, inline with
+ * createUser, and is recorded on the ledger as reason='signup_bonus'. */
+export const SIGNUP_BONUS_CREDITS = 1;
+
 export function hasUnlimitedCredits(email?: string | null, role?: string | null): boolean {
   if (role === "admin") return true;
   const normalized = email?.trim().toLowerCase();

@@ -25,6 +25,7 @@ import { randomInt } from "node:crypto";
 import {
   FREE_CREDITS_PROMO_AMOUNT,
   FREE_CREDITS_PROMO_CODE,
+  SIGNUP_BONUS_CREDITS,
   hasUnlimitedCredits,
   CREDIT_PACKAGES,
   findCreditPackage,
@@ -151,30 +152,56 @@ function sanitizeUserForResponse<T extends { password_hash?: string | null } | u
   return rest as T;
 }
 
-/* In-memory mapping: tracks the currently "logged in" user id.
- * `null` means "no active session" — clients see 401 from /api/me and the
- * frontend renders the sign-in / create-account screen. Production auth
- * can be any best-fit provider. Replace this demo state with session/JWT
- * middleware that resolves the authenticated user.
- *
- * Stored on `globalThis` so HMR/dev reloads of this module don't silently
- * resurrect a stale session. */
-const SESSION_KEY = Symbol.for("ousted.currentUserId");
-const globalAny = globalThis as any;
-if (!(SESSION_KEY in globalAny)) globalAny[SESSION_KEY] = null;
-function getCurrentUserId(): number | null {
-  return globalAny[SESSION_KEY] ?? null;
+/* Per-client session helpers. Each browser/user gets its own
+ * express-session record (installed in server/index.ts) and the active
+ * user id is stored on `req.session.user_id`. Returning `null` means
+ * "no active session" — clients see 401 from /api/me and the frontend
+ * renders the sign-in / create-account screen. */
+function getCurrentUserId(req: Request): number | null {
+  return req.session?.user_id ?? null;
 }
-function setCurrentUserId(id: number | null) {
-  globalAny[SESSION_KEY] = id;
+
+/* Set the active user id for THIS client's session. We regenerate the
+ * session id on every authentication transition (sign-in / sign-up /
+ * password reset / set-password / admin switch) to defend against
+ * session fixation: a pre-existing anonymous cookie cannot be promoted
+ * to an authenticated session id. The new session id is what subsequent
+ * requests carry. */
+function setCurrentUserId(req: Request, id: number | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (!req.session) {
+      resolve();
+      return;
+    }
+    if (id == null) {
+      // Logout path — clear the session entirely. `destroy` removes the
+      // server-side record AND tells the cookie store to expire the
+      // cookie on the next response.
+      req.session.destroy(() => resolve());
+      return;
+    }
+    req.session.regenerate((err) => {
+      if (err) {
+        // regenerate can fail if the store is misbehaving; fall back to
+        // writing the user id onto the existing session so the user is
+        // not locked out, but log the issue.
+        console.warn("[session] regenerate failed; reusing session id", err);
+        if (req.session) req.session.user_id = id;
+        resolve();
+        return;
+      }
+      if (req.session) req.session.user_id = id;
+      req.session.save(() => resolve());
+    });
+  });
 }
 
 /* Resolve the active user for owner-gating decisions. Returns the
  * full user row if the session is valid and the user still exists,
  * or null otherwise. Always-fresh lookup so role changes (admin
  * promotion / demotion) take effect immediately. */
-async function getActor(): Promise<{ id: number; role: string; email: string } | null> {
-  const id = getCurrentUserId();
+async function getActor(req: Request): Promise<{ id: number; role: string; email: string } | null> {
+  const id = getCurrentUserId(req);
   if (id == null) return null;
   const u = await storage.getUser(id);
   if (!u) return null;
@@ -255,13 +282,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Identity / Auth simulation --------------- */
-  app.get("/api/me", async (_req: Request, res: Response) => {
-    const id = getCurrentUserId();
+  app.get("/api/me", async (req: Request, res: Response) => {
+    const id = getCurrentUserId(req);
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     const user = await storage.getUser(id);
     if (!user) {
       // Session points at a user that no longer exists — clear it.
-      setCurrentUserId(null);
+      await setCurrentUserId(req, null);
       return res.status(401).json({ error: "Not signed in" });
     }
     res.json(sanitizeUserForResponse(user));
@@ -300,7 +327,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!verifyPassword(password, user.password_hash)) {
       return res.status(401).json({ error: INVALID_CREDENTIALS });
     }
-    setCurrentUserId(user.id);
+    await setCurrentUserId(req, user.id);
     res.json(sanitizeUserForResponse(user));
   });
 
@@ -317,21 +344,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (await storage.getUserByEmail(email)) {
       return res.status(409).json({ error: "An account with that email already exists" });
     }
-    // New accounts start with zero credits. Entitlement to a free quota
-    // (promo codes, unlimited-list, admin role) is granted explicitly
-    // elsewhere — never as a side effect of account creation. A zero-credit
-    // user can still run analyses, but every report they generate is saved
-    // with is_locked=true so the readable body is gated until they buy
-    // credits or are otherwise entitled.
+    // Welcome bonus: every new signup gets exactly 1 free credit so the
+    // first report can be unlocked without a purchase. This is a one-time
+    // grant tied to account creation — it does NOT replay for existing
+    // accounts and is recorded as a ledger row with reason='signup_bonus'
+    // so the credit history explains where the credit came from.
+    const createdAt = new Date().toISOString();
     const user = await storage.createUser({
       full_name,
       email,
       role: "user",
-      credits: 0,
-      created_date: new Date().toISOString(),
+      credits: SIGNUP_BONUS_CREDITS,
+      created_date: createdAt,
       password_hash: hashPassword(parsed.data.password),
     });
-    setCurrentUserId(user.id);
+    if (SIGNUP_BONUS_CREDITS > 0) {
+      try {
+        await storage.appendCreditTransaction({
+          user_id: user.id,
+          amount_delta: SIGNUP_BONUS_CREDITS,
+          balance_after: user.credits,
+          reason: "signup_bonus",
+          reference: "welcome_credit",
+          provider: null,
+          created_at: createdAt,
+        });
+      } catch (err) {
+        // Ledger write should never fail in practice, but if it does
+        // (DB unavailable mid-request), the user has already been
+        // created — log loudly and continue. The user still has the
+        // credit balance and can use the product.
+        console.warn(
+          `[signup] welcome-credit ledger write failed for user=${user.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    await setCurrentUserId(req, user.id);
     res.json(sanitizeUserForResponse(user));
   });
 
@@ -500,7 +548,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.setUserPassword(user.id, hashPassword(parsed.data.password));
     if (!updated) return res.status(500).json({ error: "Failed to reset password" });
 
-    setCurrentUserId(updated.id);
+    await setCurrentUserId(req, updated.id);
     res.json(sanitizeUserForResponse(updated));
   });
 
@@ -525,32 +573,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const updated = await storage.setUserPassword(user.id, hashPassword(parsed.data.password));
     if (!updated) return res.status(500).json({ error: "Failed to set password" });
-    setCurrentUserId(updated.id);
+    await setCurrentUserId(req, updated.id);
     res.json(sanitizeUserForResponse(updated));
   });
 
   app.post("/api/me/switch", async (req: Request, res: Response) => {
     // Admin-only utility, gated by the current session.
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
     const id = Number(req.body?.user_id);
     const user = await storage.getUser(id);
     if (!user) return res.status(404).json({ error: "User not found" });
-    setCurrentUserId(id);
+    await setCurrentUserId(req, id);
     res.json(sanitizeUserForResponse(user));
   });
 
-  app.post("/api/me/logout", (_req: Request, res: Response) => {
-    // Clears the in-memory session. In production this would also clear
-    // the session cookie / token.
-    setCurrentUserId(null);
+  app.post("/api/me/logout", async (req: Request, res: Response) => {
+    // Clears THIS client's session (destroys the server record AND
+    // expires the cookie). Other clients are unaffected.
+    await setCurrentUserId(req, null);
+    res.clearCookie("cp.sid");
     res.json({ ok: true });
   });
 
   /* --------------- Admin --------------- */
-  app.get("/api/users", async (_req: Request, res: Response) => {
-    const meId = getCurrentUserId();
+  app.get("/api/users", async (req: Request, res: Response) => {
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
     const all = await storage.listUsers();
@@ -558,7 +607,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/users/set-credits", async (req: Request, res: Response) => {
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
     const parsed = setCreditsSchema.safeParse(req.body);
@@ -587,14 +636,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Resumes --------------- */
-  app.get("/api/resumes", async (_req: Request, res: Response) => {
-    const id = getCurrentUserId();
+  app.get("/api/resumes", async (req: Request, res: Response) => {
+    const id = getCurrentUserId(req);
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     res.json(await storage.listResumes(id));
   });
 
   app.post("/api/resumes", async (req: Request, res: Response) => {
-    const id = getCurrentUserId();
+    const id = getCurrentUserId(req);
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     const parsed = uploadResumeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -625,7 +674,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/resumes/:id", async (req: Request, res: Response) => {
-    const actor = await getActor();
+    const actor = await getActor(req);
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
     const r = await storage.getResume(id);
@@ -638,7 +687,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/resumes/prefill", async (req: Request, res: Response) => {
-    const actor = await getActor();
+    const actor = await getActor(req);
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const parsed = prefillFromResumeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -855,15 +904,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Analyses --------------- */
-  app.get("/api/analyses", async (_req: Request, res: Response) => {
-    const id = getCurrentUserId();
+  app.get("/api/analyses", async (req: Request, res: Response) => {
+    const id = getCurrentUserId(req);
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     const list = await storage.listAnalyses(id);
     res.json(list.map(sanitizeAnalysisForResponse));
   });
 
   app.get("/api/analyses/:id", async (req: Request, res: Response) => {
-    const actor = await getActor();
+    const actor = await getActor(req);
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
     const a = await storage.getAnalysis(id);
@@ -877,7 +926,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/analyses/:id", async (req: Request, res: Response) => {
-    const actor = await getActor();
+    const actor = await getActor(req);
     if (!actor) return res.status(401).json({ error: "Not signed in" });
     const id = Number(req.params.id);
     const a = await storage.getAnalysis(id);
@@ -898,7 +947,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * error so the frontend can route them to the Buy Credits flow. */
   app.post("/api/analyses/:id/unlock", limitUnlock, async (req: Request, res: Response) => {
     const id = Number(req.params.id);
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
     const analysis = await storage.getAnalysis(id);
@@ -937,7 +986,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/analyses", async (req: Request, res: Response) => {
     const parsed = analyzeRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
@@ -1029,7 +1078,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payments/create-checkout", limitCheckoutCreate, async (req: Request, res: Response) => {
     const parsed = createCheckoutSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid package" });
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
@@ -1121,7 +1170,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
      *     /api/me + /api/credits/transactions so the new balance is
      *     visible as soon as the webhook completes.
      */
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 
@@ -1307,8 +1356,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   /* --------------- Credits: ledger + promo + admin grant --------------- */
-  app.get("/api/credits/transactions", async (_req: Request, res: Response) => {
-    const meId = getCurrentUserId();
+  app.get("/api/credits/transactions", async (req: Request, res: Response) => {
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
     const txs: CreditTransaction[] = await storage.listCreditTransactions(me.id);
@@ -1320,7 +1369,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!parsed.success) {
       return res.status(400).json({ error: "Promo code is required" });
     }
-    const meId = getCurrentUserId();
+    const meId = getCurrentUserId(req);
     const me = meId != null ? await storage.getUser(meId) : undefined;
     if (!me) return res.status(401).json({ error: "Not signed in" });
 

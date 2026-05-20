@@ -182,7 +182,7 @@ export const creditTransactions = sqliteTable("credit_transactions", {
   user_id: integer("user_id").notNull(),
   amount_delta: integer("amount_delta").notNull(),
   balance_after: integer("balance_after").notNull(),
-  reason: text("reason").notNull(), // 'purchase' | 'promo' | 'unlock_spend' | 'admin_adjustment'
+  reason: text("reason").notNull(), // 'purchase' | 'promo' | 'unlock_spend' | 'admin_adjustment' | 'signup_bonus'
   reference: text("reference"), // package id, promo code, analysis id, etc.
   provider: text("provider"), // 'preview' | 'stripe' | 'lemonsqueezy' | null
   created_at: text("created_at").notNull(),
@@ -195,6 +195,7 @@ export const CREDIT_TX_REASONS = [
   "promo",
   "unlock_spend",
   "admin_adjustment",
+  "signup_bonus",
 ] as const;
 export type CreditTxReason = (typeof CREDIT_TX_REASONS)[number];
 

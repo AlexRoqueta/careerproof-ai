@@ -6,6 +6,7 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { validateConfigAtStartup } from "./config";
 import { initStorage } from "./storage";
+import { createSessionMiddleware } from "./session";
 
 const app = express();
 const httpServer = createServer(app);
@@ -37,6 +38,13 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+/* Per-client session middleware. Replaces the previous globalThis
+ * singleton with a signed httpOnly cookie + server-side session store.
+ * Installed BEFORE registerRoutes so every handler can read/write
+ * req.session.user_id. See server/session.ts for the secret/cookie
+ * policy. */
+app.use(createSessionMiddleware());
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
