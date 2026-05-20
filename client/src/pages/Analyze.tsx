@@ -465,10 +465,10 @@ export default function Analyze() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
             <Info className="w-4 h-4 text-primary" />
-            Pick how you’d like to start
+            Choose one way to start
           </CardTitle>
           <CardDescription className="text-xs">
-            Choose any of the options below. You can mix and match — and you can always edit the fields before generating.
+            You can upload a resume, import LinkedIn information, or enter a job title manually.
           </CardDescription>
         </CardHeader>
       </Card>
