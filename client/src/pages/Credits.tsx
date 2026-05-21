@@ -15,6 +15,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   ShieldCheck,
+  Lock,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -28,8 +29,12 @@ import {
   type CreditPackage,
   formatPrice,
 } from "@shared/entitlements";
-import type { CreditTransaction } from "@shared/schema";
+import type { Analysis, CreditTransaction } from "@shared/schema";
 import { track, EVENTS } from "@/lib/analytics";
+import {
+  clearPendingUnlockAnalysisId,
+  getPendingUnlockAnalysisId,
+} from "@/lib/pendingUnlock";
 
 /* =====================================================================
  * Credits page \u2014 provider-agnostic purchase, promo redemption, history
@@ -89,7 +94,7 @@ interface CompleteResponse {
 export default function Credits() {
   const { data: me } = useMe();
   const { toast } = useToast();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [promoCode, setPromoCode] = useState("");
   const [completionStatus, setCompletionStatus] = useState<
     | { kind: "success"; credits: number; already: boolean }
@@ -104,6 +109,101 @@ export default function Credits() {
    * in the URL on redirect anyway) and clears on refresh. */
   const [pendingStripeSession, setPendingStripeSession] = useState<string | null>(null);
   const unlimitedCredits = hasUnlimitedCredits(me?.email, me?.role);
+
+  /* Auto-unlock-after-purchase state.
+   *
+   * When the user lands on /credits after clicking "Buy credits to
+   * unlock" from a locked report, we remember the target analysis id in
+   * localStorage (see lib/pendingUnlock.ts). The id is read once on
+   * mount; the Credits page surfaces a banner explaining what will
+   * happen, and the moment a purchase completes (preview inline grant,
+   * or Stripe webhook ledger row arrives) we POST
+   * /api/analyses/:id/unlock and navigate the user straight to the
+   * full report. The id is cleared as soon as the unlock attempt
+   * resolves so a stale pending id can never auto-unlock an unrelated
+   * future purchase. */
+  const [pendingUnlockId, setPendingUnlockId] = useState<number | null>(null);
+  const [unlockAttempted, setUnlockAttempted] = useState(false);
+  useEffect(() => {
+    setPendingUnlockId(getPendingUnlockAnalysisId());
+  }, []);
+
+  const unlockAfterPurchase = useMutation({
+    mutationFn: async (analysisId: number) => {
+      const res = await apiRequest("POST", `/api/analyses/${analysisId}/unlock`);
+      return (await res.json()) as Analysis;
+    },
+    onSuccess: async (updated) => {
+      clearPendingUnlockAnalysisId();
+      await queryClient.invalidateQueries({ queryKey: ["/api/me"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/credits/transactions"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/analyses"] });
+      queryClient.setQueryData(["/api/analyses", updated.id], updated);
+      toast({
+        title: "Report unlocked",
+        description: "Taking you back to your full report…",
+      });
+      /* Defer the navigation a tick so the toast has a chance to render
+       * before the route changes. Wouter is hash-based so this is a
+       * pure client-side transition — no full reload. */
+      setTimeout(() => {
+        setLocation(`/report/${updated.id}`);
+      }, 300);
+    },
+    onError: (err: any) => {
+      /* The most likely failure is "insufficient_credits" if a Stripe
+       * webhook hasn't actually landed yet despite the success status
+       * — we leave the pending id in place so the next ledger refresh
+       * can retry, and surface a non-destructive toast. Any other error
+       * clears the pending id so the user is not stuck in an auto-retry
+       * loop. */
+      const raw = String(err?.message ?? "");
+      const insufficient =
+        raw.startsWith("402") ||
+        raw.includes("insufficient_credits") ||
+        raw.includes("don’t have any credits");
+      if (!insufficient) {
+        clearPendingUnlockAnalysisId();
+        setPendingUnlockId(null);
+        toast({
+          title: "Unable to unlock the report automatically",
+          description:
+            "Your credits are on your account. Open the report from History and click Unlock to apply one.",
+          variant: "destructive",
+        });
+      }
+    },
+  });
+
+  /* Fire auto-unlock as soon as both conditions hold:
+   *   1. The user has a pending unlock target stashed.
+   *   2. A purchase has just completed successfully (kind === "success"
+   *      and `already` === false means a credit was just granted).
+   * Also re-fire when `already === true` so re-landing after a previous
+   * grant still resolves the locked report. We guard with
+   * `unlockAttempted` so the mutation runs at most once per page load. */
+  useEffect(() => {
+    if (unlockAttempted) return;
+    if (!pendingUnlockId) return;
+    if (completionStatus?.kind !== "success") return;
+    if (unlockAfterPurchase.isPending) return;
+    setUnlockAttempted(true);
+    unlockAfterPurchase.mutate(pendingUnlockId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completionStatus, pendingUnlockId, unlockAttempted]);
+
+  /* Unlimited-credit users (admins or entitled emails) who hit /credits
+   * with a pending unlock target should also be sent straight back —
+   * unlocking is free for them and there is no purchase step. */
+  useEffect(() => {
+    if (unlockAttempted) return;
+    if (!pendingUnlockId) return;
+    if (!unlimitedCredits) return;
+    if (unlockAfterPurchase.isPending) return;
+    setUnlockAttempted(true);
+    unlockAfterPurchase.mutate(pendingUnlockId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlimitedCredits, pendingUnlockId, unlockAttempted]);
 
   const packagesQuery = useQuery<PackagesResponse>({
     queryKey: ["/api/payments/packages"],
@@ -363,6 +463,10 @@ export default function Credits() {
           <p className="text-sm text-muted-foreground">
             One credit unlocks one full report. The free preview shows your score and a short summary —
             credits unlock the detailed task breakdown, skills to build, action plan, and PDF export.{" "}
+            {pendingUnlockId
+              ? "We'll automatically use one credit on your existing locked report (no rerun)."
+              : null}
+            {" "}
             {unlimitedCredits
               ? "You have unlimited credits."
               : `You currently have ${me?.credits ?? 0} credit${me?.credits === 1 ? "" : "s"}.`}
@@ -376,6 +480,36 @@ export default function Credits() {
           <AlertTitle>Unlimited credits enabled</AlertTitle>
           <AlertDescription>
             The signed-in email is entitled to unlimited AI analyses, so purchases are optional.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {pendingUnlockId && !completionStatus && !unlockAfterPurchase.isPending && (
+        <Alert
+          data-testid="alert-pending-unlock"
+          className="border-cyan-500/30 bg-cyan-500/10"
+        >
+          <Lock className="w-4 h-4" />
+          <AlertTitle>Buying a credit will unlock your locked report</AlertTitle>
+          <AlertDescription>
+            Your preview report is saved. After checkout completes we'll
+            automatically use one credit to unlock report&nbsp;#{pendingUnlockId}
+            {" "}and bring you straight back to it — you won't need to rerun
+            the analysis.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {unlockAfterPurchase.isPending && (
+        <Alert
+          data-testid="alert-auto-unlocking"
+          className="border-emerald-500/30 bg-emerald-500/10"
+        >
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <AlertTitle>Unlocking your report…</AlertTitle>
+          <AlertDescription>
+            Applying one credit to your existing locked report. You'll be
+            taken back to the full report in a moment.
           </AlertDescription>
         </Alert>
       )}

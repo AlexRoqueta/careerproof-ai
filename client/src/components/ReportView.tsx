@@ -192,10 +192,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                You're seeing your AI exposure score and a short summary. Unlock the
-                full AI Exposure Report to read your detailed task breakdown, the
-                skills to build, the safer next moves, a 90-day action plan, and
-                PDF export.
+                You're seeing your AI exposure score and a short summary. Buy a
+                credit pack and we'll bring you straight back to this report and
+                unlock it automatically — no rerun. You'll get your detailed task
+                breakdown, the skills to build, the safer next moves, a 90-day
+                action plan, and PDF export.
               </p>
 
               {preview?.summary && (
@@ -333,7 +334,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
         onOpenChange={setShareOpen}
         analysis={analysis}
       />
-      <BuyCreditsModal open={buyOpen} onOpenChange={setBuyOpen} />
+      <BuyCreditsModal
+        open={buyOpen}
+        onOpenChange={setBuyOpen}
+        targetAnalysisId={isLocked ? analysis.id : undefined}
+      />
       <FeedbackModal
         open={feedbackOpen}
         onOpenChange={setFeedbackOpen}
