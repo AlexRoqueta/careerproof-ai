@@ -41,6 +41,8 @@ declare global {
 }
 
 let initialized = false;
+let gaInitialized = false;
+let gaInitializedId = "";
 
 /**
  * Inject all configured provider snippets. Safe to call repeatedly — the
@@ -95,23 +97,36 @@ function loadMetaPixel(id: string) {
 }
 
 function loadGA(id: string) {
-  if (window.gtag) return;
-  const s = document.createElement("script");
-  s.async = true;
-  s.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
-  document.head.appendChild(s);
+  // Guard per-ID, not on presence of window.gtag: if some other code stubbed
+  // gtag without configuring this measurement ID, GA would silently never fire.
+  if (gaInitialized && gaInitializedId === id) return;
+
+  // Standard Google tag snippet ordering: dataLayer + gtag stub MUST exist
+  // before the gtag.js script loads, and gtag must push `arguments` (not a
+  // plain array) so the loaded library recognizes queued commands.
   window.dataLayer = window.dataLayer || [];
-  window.gtag = function gtag(...args: unknown[]) {
-    window.dataLayer!.push(args);
-  };
+  if (!window.gtag) {
+    window.gtag = function gtag() {
+      // eslint-disable-next-line prefer-rest-params
+      window.dataLayer!.push(arguments as unknown as unknown[]);
+    };
+  }
   // @ts-ignore — gtag's stub accepts the literal "js" command with a Date.
   window.gtag("js", new Date());
   window.gtag("config", id, { send_page_view: true });
-  if (env.DEV) {
-    // Dev-only signal that GA wired up. Helps confirm the env var was
-    // read at build time — without this, a silent "no env" looks the
-    // same as "GA not firing". Stripped from production by Vite.
-    console.info("[analytics] GA4 initialized:", id);
+
+  gaInitialized = true;
+  gaInitializedId = id;
+
+  // Inject the loader last. The queued commands above will replay once it lands.
+  const existing = document.querySelector<HTMLScriptElement>(
+    `script[src^="https://www.googletagmanager.com/gtag/js"]`,
+  );
+  if (!existing) {
+    const s = document.createElement("script");
+    s.async = true;
+    s.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
+    document.head.appendChild(s);
   }
 }
 
@@ -159,8 +174,9 @@ export function track(name: string, params: Params = {}): void {
     }
   }
 
-  // GA4 — every event ships through `event`.
-  if (GA_MEASUREMENT_ID && window.gtag) {
+  // GA4 — every event ships through `event`. We check gaInitialized rather
+  // than window.gtag presence so we don't get fooled by a third-party stub.
+  if (GA_MEASUREMENT_ID && gaInitialized && window.gtag) {
     try {
       window.gtag("event", name, params);
     } catch {
@@ -223,7 +239,7 @@ export function identify(userId: string | number, traits?: Params): void {
       /* ignore */
     }
   }
-  if (GA_MEASUREMENT_ID && window.gtag) {
+  if (GA_MEASUREMENT_ID && gaInitialized && window.gtag) {
     try {
       window.gtag("set", { user_id: String(userId) });
     } catch {
