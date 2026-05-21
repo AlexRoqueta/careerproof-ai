@@ -89,6 +89,31 @@ export const autofillRequestSchema = z.object({
 });
 export type AutofillRequest = z.infer<typeof autofillRequestSchema>;
 
+/* =====================================================================
+ * Anonymous preview (no account required)
+ *
+ * Cold visitors (e.g. ad traffic) can POST /api/preview/analyze with
+ * just a job title and description. The server generates a real AI
+ * analysis, stashes it in an in-memory token store, and returns an
+ * opaque token plus a small teaser payload (score + summary + top
+ * vulnerable tasks). The full readable body NEVER reaches the
+ * anonymous client — unlocking requires signing up or in and then
+ * claiming the token via POST /api/preview/:token/claim.
+ *
+ * Resume / LinkedIn imports are NOT available to anonymous users —
+ * those flows require account-bound storage. Manual entry + AI
+ * autofill is sufficient to produce a meaningful preview.
+ * ===================================================================== */
+export const previewAnalyzeRequestSchema = z.object({
+  job_title: z.string().min(1, "Job title is required").max(200, "Job title is too long"),
+  job_description: z
+    .string()
+    .min(1, "Job description is required")
+    .max(20_000, "Job description is too long"),
+  technology_context: z.string().max(5_000).optional(),
+});
+export type PreviewAnalyzeRequest = z.infer<typeof previewAnalyzeRequestSchema>;
+
 export const prefillFromResumeSchema = z.object({
   resume_id: z.number(),
 });

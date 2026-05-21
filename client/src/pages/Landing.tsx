@@ -42,8 +42,11 @@ export default function Landing() {
 
   function goStart(source: string = "unknown") {
     track(EVENTS.landing_cta_click, { source });
-    setLocation("/signin");
-    // Scroll to top so the SignIn screen lands at the top of the viewport
+    // Route into the anonymous preview flow — no account required to
+    // generate a free AI job-risk preview. Sign-up is only requested
+    // after the preview is shown.
+    setLocation("/analyze");
+    // Scroll to top so the Analyze screen lands at the top of the viewport
     // on small screens where the landing page may have been scrolled deep.
     window.scrollTo({ top: 0, behavior: "auto" });
   }
@@ -126,7 +129,7 @@ function NavBar({ onStart }: { onStart: () => void }) {
           className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-lg shadow-sky-500/20"
           data-testid="button-nav-start"
         >
-          Get free preview <ArrowRight className="ml-1 h-4 w-4" />
+          Start free preview <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </header>
@@ -172,7 +175,7 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
               className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
               data-testid="button-hero-start"
             >
-              Get my free AI job-risk preview <ArrowRight className="ml-2 h-4 w-4" />
+              Start free preview — no account needed <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
             <Button
               onClick={onHow}
@@ -782,7 +785,7 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
               <span className="bg-gradient-to-r from-cyan-300 to-sky-300 bg-clip-text text-transparent">before your role changes.</span>
             </h2>
             <p className="mt-4 text-muted-foreground text-base sm:text-lg max-w-2xl mx-auto">
-              Get your free AI job-risk preview in under a minute. No credit card. Your data stays yours.
+              Get your free AI job-risk preview in under a minute. No account needed to start. No credit card. Your data stays yours.
             </p>
             <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
               <Button
@@ -791,7 +794,7 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
                 className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
                 data-testid="button-final-start"
               >
-                Get my free preview <ArrowRight className="ml-2 h-4 w-4" />
+                Start free preview — no account needed <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
             <p className="mt-5 text-xs text-muted-foreground max-w-2xl mx-auto">

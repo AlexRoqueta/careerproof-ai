@@ -10,8 +10,41 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Logo } from "@/components/Logo";
 import { Loader2, LogIn, UserPlus, ArrowRight, KeyRound, MailQuestion, ShieldCheck } from "lucide-react";
-import type { User } from "@shared/schema";
+import type { User, Analysis } from "@shared/schema";
 import { track, identify, EVENTS } from "@/lib/analytics";
+import {
+  readAnonPreviewToken,
+  clearAnonPreviewToken,
+  setJustClaimedAnalysisId,
+} from "@/lib/anonPreview";
+
+/* If the visitor generated an anonymous preview before signing in, the
+ * opaque token is in localStorage. After auth we POST it to the claim
+ * endpoint so the freshly generated AI report is saved into the user's
+ * account WITHOUT re-running the analysis. The resulting analysis id
+ * is stashed in sessionStorage for the Analyze page to pick up on
+ * mount, so the user lands directly inside their saved (locked)
+ * report. Failures here are non-fatal — the user still ends up in the
+ * dashboard; they'd just need to run a fresh analysis. */
+async function claimAnonymousPreviewIfPresent(): Promise<void> {
+  const token = readAnonPreviewToken();
+  if (!token) return;
+  try {
+    const res = await apiRequest("POST", `/api/preview/${encodeURIComponent(token)}/claim`);
+    const analysis = (await res.json()) as Analysis;
+    if (analysis && typeof analysis.id === "number") {
+      setJustClaimedAnalysisId(analysis.id);
+      track(EVENTS.anonymous_preview_claimed, {
+        analysis_id: analysis.id,
+        locked: !!analysis.is_locked,
+      });
+    }
+  } catch {
+    /* token expired or already claimed — silently ignore */
+  } finally {
+    clearAnonPreviewToken();
+  }
+}
 
 /**
  * Unauthenticated landing screen. Shown whenever /api/me returns 401
@@ -51,7 +84,11 @@ export default function SignIn() {
     }
   };
 
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  // If the visitor just generated an anonymous preview, default the
+  // auth screen to "Create account" — that's the more common next
+  // step coming from the preview funnel.
+  const hasPendingPreview = typeof window !== "undefined" && !!readAnonPreviewToken();
+  const [mode, setMode] = useState<"signin" | "signup">(hasPendingPreview ? "signup" : "signin");
   const [signInEmail, setSignInEmail] = useState("");
   const [signInPassword, setSignInPassword] = useState("");
   const [signUpName, setSignUpName] = useState("");
@@ -94,6 +131,9 @@ export default function SignIn() {
       setSignInPassword("");
       if (user?.id != null) identify(user.id);
       track(EVENTS.signin_completed);
+      const hadPendingPreview = !!readAnonPreviewToken();
+      await claimAnonymousPreviewIfPresent();
+      if (hadPendingPreview) track(EVENTS.signup_after_preview, { mode: "signin" });
       await queryClient.invalidateQueries();
       goToDashboard();
     },
@@ -127,6 +167,9 @@ export default function SignIn() {
       setSignUpConfirm("");
       if (user?.id != null) identify(user.id);
       track(EVENTS.signup_completed);
+      const hadPendingPreview = !!readAnonPreviewToken();
+      await claimAnonymousPreviewIfPresent();
+      if (hadPendingPreview) track(EVENTS.signup_after_preview, { mode: "signup" });
       await queryClient.invalidateQueries();
       goToDashboard();
     },
@@ -169,6 +212,7 @@ export default function SignIn() {
       setResetConfirm("");
       setResetNotice(null);
       setPreviewCode(null);
+      await claimAnonymousPreviewIfPresent();
       await queryClient.invalidateQueries();
       goToDashboard();
     },
@@ -199,6 +243,7 @@ export default function SignIn() {
       setSetupEmail(null);
       setSetupPassword("");
       setSetupConfirm("");
+      await claimAnonymousPreviewIfPresent();
       await queryClient.invalidateQueries();
       goToDashboard();
     },
@@ -536,7 +581,9 @@ export default function SignIn() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">CareerProof AI</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Sign in to your account or create a new one to analyze your role.
+              {hasPendingPreview
+                ? "Create a free account to save your preview and unlock the full AI Exposure Report. We'll bring you straight back to your saved report — no rerun, nothing to re-enter."
+                : "Sign in to your account or create a new one to analyze your role."}
             </p>
           </div>
         </div>

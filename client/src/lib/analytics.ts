@@ -221,6 +221,14 @@ export const EVENTS = {
   feedback_shown: "feedback_shown",
   feedback_submitted: "feedback_submitted",
   feedback_dismissed: "feedback_dismissed",
+  // Anonymous (pre-signup) preview funnel
+  anonymous_preview_started: "anonymous_preview_started",
+  anonymous_preview_completed: "anonymous_preview_completed",
+  anonymous_preview_failed: "anonymous_preview_failed",
+  signup_prompt_shown: "signup_prompt_shown",
+  signup_after_preview: "signup_after_preview",
+  unlock_cta_after_preview: "unlock_cta_after_preview",
+  anonymous_preview_claimed: "anonymous_preview_claimed",
 } as const;
 
 /* Map our funnel events to Meta standard events where the semantic

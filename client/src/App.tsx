@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Analyze from "@/pages/Analyze";
+import AnonymousAnalyze from "@/pages/AnonymousAnalyze";
 import History from "@/pages/History";
 import Resumes from "@/pages/Resumes";
 import Credits from "@/pages/Credits";
@@ -153,18 +154,22 @@ function AppRouter() {
     return <AuthLoading />;
   }
 
-  // No session → show the public marketing landing page at `/` and the
-  // sign-in / create-account screen at `/signin`. The sample report is
-  // also reachable without a session so prospective users can see what
-  // the product produces before signing up. Any other hash route gets
-  // normalized back to `/` so protected pages cannot render with stale
-  // signed-in UI after sign-out.
+  // No session → public surfaces:
+  //   /            → marketing landing page
+  //   /analyze     → anonymous AI job-risk preview flow (NEW)
+  //   /signin      → sign-in / create-account (preserves preview ?token)
+  //   /sample-report
+  // Everything else gets normalized back to `/` so protected pages
+  // cannot render with stale signed-in UI after sign-out.
   if (!me) {
     if (location === "/signin") {
       return <SignIn />;
     }
     if (location === "/sample-report") {
       return <SampleReport />;
+    }
+    if (location === "/analyze") {
+      return <AnonymousAnalyze />;
     }
     if (location !== "/") {
       // Normalize the hash so the URL reflects the unauthenticated state.

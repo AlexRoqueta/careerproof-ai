@@ -40,6 +40,7 @@ import { ReportView } from "@/components/ReportView";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { track, EVENTS } from "@/lib/analytics";
+import { takeJustClaimedAnalysisId } from "@/lib/anonPreview";
 
 const ACCEPTED_TYPES = [
   "application/pdf",
@@ -387,6 +388,29 @@ export default function Analyze() {
   };
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  /* Pick up an analysis that was just claimed from an anonymous
+   * preview (sign-up/in path). The id is one-shot — once we consume it
+   * we fetch the saved record and hand it to ReportView. The user
+   * lands directly inside their saved (locked) report with all the
+   * preview data intact, no rerun needed. */
+  useEffect(() => {
+    const claimedId = takeJustClaimedAnalysisId();
+    if (claimedId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/analyses/${claimedId}`);
+        const a = (await res.json()) as Analysis;
+        if (!cancelled) setResultAnalysis(a);
+      } catch {
+        /* If the fetch fails the user can still kick off a new analysis. */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!resultAnalysis) return;

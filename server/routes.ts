@@ -20,7 +20,16 @@ import {
   resetPasswordRequestSchema,
   linkedinImportSchema,
   analysisFeedbackSchema,
+  previewAnalyzeRequestSchema,
 } from "@shared/schema";
+import {
+  putAnonPreview,
+  getAnonPreview,
+  consumeAnonPreview,
+  buildAnonPreviewPayload,
+  anonPreviewToInsertAnalysis,
+} from "./preview-tokens";
+import { clientIp } from "./rate-limit";
 import { hashPassword, verifyPassword } from "./password";
 import { randomInt } from "node:crypto";
 import {
@@ -128,7 +137,7 @@ export interface AnalysisPreview {
   locked_sections: string[];
 }
 
-function buildAnalysisPreview(a: Analysis): AnalysisPreview {
+function buildAnalysisPreview(a: Pick<Analysis, "result_text">): AnalysisPreview {
   const lines = a.result_text.split(/\r?\n/);
   let summary = "";
   const vulnerable_tasks: string[] = [];
@@ -389,6 +398,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const limitFeedback = rateLimit({
     scope: "feedback",
     max: 5,
+    windowMs: 60_000,
+    keyFn: keyByIp,
+  });
+  /* Anonymous preview: cold ad traffic hits this endpoint without a
+   * session. Two layers of rate limit guard against abuse:
+   *   - 3 previews per minute per IP (short-burst protection)
+   *   - 15 previews per hour per IP (sustained-abuse protection)
+   * A logged-in user does NOT use this endpoint; signed-in analyses
+   * go through /api/analyses which has its own credit gating. */
+  const limitPreviewAnalyzeMinute = rateLimit({
+    scope: "preview-analyze-min",
+    max: 3,
+    windowMs: 60_000,
+    keyFn: keyByIp,
+  });
+  const limitPreviewAnalyzeHour = rateLimit({
+    scope: "preview-analyze-hour",
+    max: 15,
+    windowMs: 60 * 60_000,
+    keyFn: keyByIp,
+  });
+  const limitPreviewClaim = rateLimit({
+    scope: "preview-claim",
+    max: 20,
     windowMs: 60_000,
     keyFn: keyByIp,
   });
@@ -1014,6 +1047,105 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
     }
   });
+
+  /* --------------- Anonymous preview ---------------
+   *
+   * The new top-of-funnel for cold visitors. These endpoints DO NOT
+   * require a session and produce only a teaser (score + summary +
+   * top vulnerable tasks). Signing up or in is required to claim the
+   * preview into a real analyses row and unlock the full report.
+   *
+   *   POST /api/preview/analyze       → run AI, stash in token store,
+   *                                     return teaser + token
+   *   GET  /api/preview/:token        → re-fetch teaser by token
+   *   POST /api/preview/:token/claim  → after auth, promote into the
+   *                                     caller's account (locked unless
+   *                                     they have credits / entitlement)
+   */
+  app.post(
+    "/api/preview/analyze",
+    limitPreviewAnalyzeHour,
+    limitPreviewAnalyzeMinute,
+    async (req: Request, res: Response) => {
+      const parsed = previewAnalyzeRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const first = parsed.error.issues[0];
+        return res.status(400).json({ error: first?.message ?? "Invalid input" });
+      }
+      const controller = new AbortController();
+      req.on("aborted", () => controller.abort());
+      try {
+        const out = await generateAnalysis({
+          job_title: toTitleCase(parsed.data.job_title),
+          job_description: parsed.data.job_description,
+          technology_context: parsed.data.technology_context,
+          resume_text: null,
+          signal: controller.signal,
+        });
+        const rec = putAnonPreview({
+          job_title: parsed.data.job_title,
+          job_description: parsed.data.job_description,
+          technology_context: parsed.data.technology_context ?? null,
+          result_text: out.result_text,
+          provider_used: out.provider_used,
+          automation_risk: out.automation_risk,
+          risk_score: out.risk_score,
+          source_ip: clientIp(req),
+        });
+        const payload = buildAnonPreviewPayload(rec, buildAnalysisPreview);
+        return res.json(payload);
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          return res.status(499).json({ error: "Aborted" });
+        }
+        console.error("[preview.analyze] failed:", err);
+        return res.status(500).json({ error: "Preview analysis failed" });
+      }
+    },
+  );
+
+  app.get("/api/preview/:token", (req: Request, res: Response) => {
+    const token = String(req.params.token || "");
+    const rec = getAnonPreview(token);
+    if (!rec) return res.status(404).json({ error: "Preview not found or expired" });
+    return res.json(buildAnonPreviewPayload(rec, buildAnalysisPreview));
+  });
+
+  app.post(
+    "/api/preview/:token/claim",
+    limitPreviewClaim,
+    async (req: Request, res: Response) => {
+      const token = String(req.params.token || "");
+      const meId = getCurrentUserId(req);
+      const me = meId != null ? await storage.getUser(meId) : undefined;
+      if (!me) return res.status(401).json({ error: "Not signed in" });
+      // Consume the token first — single use. If the claim itself
+      // fails after this point (DB error etc.) the user can re-run
+      // the preview; we don't try to "return" the token.
+      const rec = consumeAnonPreview(token);
+      if (!rec) return res.status(404).json({ error: "Preview not found or expired" });
+      // Claim is a "save my preview to my account" action — we DO
+      // NOT auto-spend a credit here even if the user has one.
+      // Unlimited entitlement claims fully-unlocked (no credit cost
+      // either way). Everyone else's claim lands locked, and the
+      // existing POST /api/analyses/:id/unlock endpoint is the
+      // single, intentional spend path.
+      const unlimited = hasUnlimitedCredits(me.email, me.role);
+      const willLock = !unlimited;
+      try {
+        const saved = await storage.createAnalysis(
+          anonPreviewToInsertAnalysis(rec, {
+            created_by: me.id,
+            is_locked: willLock,
+          }),
+        );
+        return res.json(withPreviewIfLocked(saved));
+      } catch (err: any) {
+        console.error("[preview.claim] failed:", err);
+        return res.status(500).json({ error: "Failed to save preview" });
+      }
+    },
+  );
 
   /* --------------- Analyses --------------- */
   app.get("/api/analyses", async (req: Request, res: Response) => {
