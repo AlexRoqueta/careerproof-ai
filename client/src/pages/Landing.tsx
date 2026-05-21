@@ -126,7 +126,7 @@ function NavBar({ onStart }: { onStart: () => void }) {
           className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-lg shadow-sky-500/20"
           data-testid="button-nav-start"
         >
-          Start free <ArrowRight className="ml-1 h-4 w-4" />
+          Get free preview <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </header>
@@ -162,7 +162,7 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
           <div className="mt-6 inline-flex items-start gap-2.5 rounded-xl border border-cyan-400/30 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-4 py-2.5 max-w-2xl">
             <Sparkles className="mt-0.5 h-4 w-4 text-cyan-300 shrink-0" />
             <p className="text-sm sm:text-[0.95rem] font-medium text-foreground/90 leading-snug">
-              For less than a latte, get a full AI job-risk report and a plan to stay ahead.
+              Get your first AI job-risk preview free. Unlock the full report for less than a latte — $3.
             </p>
           </div>
           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -172,7 +172,7 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
               className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
               data-testid="button-hero-start"
             >
-              Check my AI job risk <ArrowRight className="ml-2 h-4 w-4" />
+              Get my free AI job-risk preview <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
             <Button
               onClick={onHow}
@@ -726,7 +726,7 @@ function FAQSection() {
     },
     {
       q: "Do I need to pay to try it?",
-      a: "No. You can run an analysis without entering a credit card. Additional reports and deeper analyses are available with credits.",
+      a: "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.",
     },
     {
       q: "Can I analyze a role I'm thinking about taking?",
@@ -782,7 +782,7 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
               <span className="bg-gradient-to-r from-cyan-300 to-sky-300 bg-clip-text text-transparent">before your role changes.</span>
             </h2>
             <p className="mt-4 text-muted-foreground text-base sm:text-lg max-w-2xl mx-auto">
-              Run your first AI-risk check in under a minute. No credit card. Your data stays yours.
+              Get your free AI job-risk preview in under a minute. No credit card. Your data stays yours.
             </p>
             <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
               <Button
@@ -791,12 +791,12 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
                 className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
                 data-testid="button-final-start"
               >
-                Start my AI risk check <ArrowRight className="ml-2 h-4 w-4" />
+                Get my free preview <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
             <p className="mt-5 text-xs text-muted-foreground max-w-2xl mx-auto">
-              No subscription required · One credit = one full report · Secure checkout powered by Stripe ·
-              Directional career-risk insight, not a guarantee.
+              Free preview, no credit card · Unlock full report from $3 · No subscription ·
+              Secure checkout powered by Stripe · Directional career-risk insight, not a guarantee.
             </p>
           </div>
         </div>

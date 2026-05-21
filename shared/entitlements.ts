@@ -6,11 +6,13 @@ export const UNLIMITED_CREDIT_EMAILS = ["roqueta.alex@gmail.com"];
 export const FREE_CREDITS_PROMO_CODE = "10FREE";
 export const FREE_CREDITS_PROMO_AMOUNT = 10;
 
-/* Welcome bonus granted at signup. New accounts get exactly this many
- * credits so the first analysis can be unlocked without a purchase.
- * Existing users are unaffected — the grant happens once, inline with
- * createUser, and is recorded on the ledger as reason='signup_bonus'. */
-export const SIGNUP_BONUS_CREDITS = 1;
+/* Welcome bonus granted at signup. Set to 0 because the free
+ * experience is now a locked "preview" report (header + score + a
+ * small teaser) rather than a full free report. Users unlock the
+ * full report by buying a credit pack ($3 / $7 / $10). Existing users
+ * are unaffected — the grant happens once, inline with createUser,
+ * and is recorded on the ledger as reason='signup_bonus'. */
+export const SIGNUP_BONUS_CREDITS = 0;
 
 export function hasUnlimitedCredits(email?: string | null, role?: string | null): boolean {
   if (role === "admin") return true;
@@ -48,7 +50,7 @@ export const CREDIT_PACKAGES: CreditPackage[] = [
   {
     id: "starter_1",
     name: "Starter",
-    description: "One assessment — try it out",
+    description: "Unlock 1 full AI Exposure Report",
     credits: 1,
     price_cents: 300,
     currency: "USD",
@@ -56,7 +58,7 @@ export const CREDIT_PACKAGES: CreditPackage[] = [
   {
     id: "standard_3",
     name: "Standard",
-    description: "Three assessments — most popular",
+    description: "Unlock 3 full reports — most popular",
     credits: 3,
     price_cents: 700,
     currency: "USD",
@@ -65,7 +67,7 @@ export const CREDIT_PACKAGES: CreditPackage[] = [
   {
     id: "value_5",
     name: "Value Pack",
-    description: "Five assessments — best per-credit price",
+    description: "Unlock 5 full reports — best per-credit price",
     credits: 5,
     price_cents: 1000,
     currency: "USD",

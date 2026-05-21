@@ -16,9 +16,11 @@ export function BuyCreditsModal({ open, onOpenChange }: Props) {
           <div className="h-12 w-12 rounded-lg bg-aurora-light dark:bg-aurora grid place-items-center mb-2">
             <CreditCard className="w-6 h-6 text-primary" />
           </div>
-          <DialogTitle>You're out of credits</DialogTitle>
+          <DialogTitle>Unlock the full AI Exposure Report</DialogTitle>
           <DialogDescription>
-            Each AI assessment uses one credit. Top up to keep analyzing — start at just $3 for a single report.
+            One credit unlocks one full report — detailed task breakdown, skills to
+            build, safer next moves, 90-day action plan, and PDF export. Start at
+            $3 for 1 report ($7 for 3, $10 for 5).
           </DialogDescription>
         </DialogHeader>
         <div className="text-xs text-muted-foreground -mt-2 mb-2">

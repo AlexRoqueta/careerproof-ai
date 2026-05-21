@@ -359,9 +359,10 @@ export default function Credits() {
           <CreditCard className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Credits</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Unlock the full AI Exposure Report</h1>
           <p className="text-sm text-muted-foreground">
-            One credit per assessment.{" "}
+            One credit unlocks one full report. The free preview shows your score and a short summary —
+            credits unlock the detailed task breakdown, skills to build, action plan, and PDF export.{" "}
             {unlimitedCredits
               ? "You have unlimited credits."
               : `You currently have ${me?.credits ?? 0} credit${me?.credits === 1 ? "" : "s"}.`}

@@ -161,6 +161,25 @@ export const redeemPromoCodeSchema = z.object({
 });
 
 /* =====================================================================
+ * Analysis feedback (post-preview survey)
+ *
+ * Posted from the FeedbackModal after a user views their free preview
+ * or full report. The server pulls everything sensitive (email,
+ * user_id, locked state, job title) from the authenticated session +
+ * the referenced analysis row — the client only supplies the rating
+ * and an optional comment.
+ *
+ * Anonymous users (no session) may also submit feedback; in that
+ * case user_id/user_email are simply omitted from the outbound email.
+ * ===================================================================== */
+export const analysisFeedbackSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().trim().max(2000).optional().or(z.literal("")),
+  analysis_id: z.number().int().optional().nullable(),
+});
+export type AnalysisFeedbackRequest = z.infer<typeof analysisFeedbackSchema>;
+
+/* =====================================================================
  * Credit ledger (durable transaction log)
  *
  * Every change to a user's credit balance — purchases, promo grants,

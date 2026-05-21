@@ -19,6 +19,7 @@ import {
   forgotPasswordRequestSchema,
   resetPasswordRequestSchema,
   linkedinImportSchema,
+  analysisFeedbackSchema,
 } from "@shared/schema";
 import { hashPassword, verifyPassword } from "./password";
 import { randomInt } from "node:crypto";
@@ -45,7 +46,7 @@ import {
 import type { Analysis } from "@shared/schema";
 import { rateLimit, keyByIp, keyByEmailAndIp } from "./rate-limit";
 import { getConfigReport } from "./config";
-import { sendPasswordResetEmail, selectEmailProvider } from "./email";
+import { sendPasswordResetEmail, sendAnalysisFeedbackEmail, selectEmailProvider } from "./email";
 
 /* Server-side redaction for locked analyses.
  *
@@ -99,6 +100,111 @@ function redactLockedMarkdown(md: string): string {
 function sanitizeAnalysisForResponse(a: Analysis): Analysis {
   if (!a.is_locked) return a;
   return { ...a, result_text: redactLockedMarkdown(a.result_text) };
+}
+
+/* Free-preview teaser builder for locked analyses.
+ *
+ * A locked analysis still needs to feel valuable — that's the whole
+ * point of letting people run one for free. We extract three small
+ * pieces from the unredacted markdown (BEFORE redactLockedMarkdown
+ * strips it):
+ *
+ *   - `summary`: the first non-empty paragraph after the "Overall"
+ *     heading, capped to ~300 chars. Anchors the "what's my risk?"
+ *     question.
+ *   - `vulnerable_tasks`: up to 3 bullet titles from the "Task
+ *     Decomposition" section (highest exposure first). Gives the
+ *     reader a concrete signal they can act on.
+ *   - `locked_sections`: a short list of section names that remain
+ *     locked so the UI can spell out what unlocking gets them.
+ *
+ * The payload is computed on the server every time a locked analysis
+ * is returned so the database schema stays unchanged. Nothing here
+ * leaks the full report body — only a few headlines and the first
+ * "Overall" paragraph. */
+export interface AnalysisPreview {
+  summary: string;
+  vulnerable_tasks: string[];
+  locked_sections: string[];
+}
+
+function buildAnalysisPreview(a: Analysis): AnalysisPreview {
+  const lines = a.result_text.split(/\r?\n/);
+  let summary = "";
+  const vulnerable_tasks: string[] = [];
+
+  // Find the paragraph after "## Overall ..." (first non-empty,
+  // non-heading line that isn't the "Risk Score:" line).
+  let inOverall = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.startsWith("## ")) {
+      if (/^##\s+overall/i.test(line)) {
+        inOverall = true;
+        continue;
+      }
+      if (inOverall) break;
+    }
+    if (!inOverall) continue;
+    if (!line) continue;
+    if (/^\*\*risk score:/i.test(line)) continue;
+    summary = line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1");
+    break;
+  }
+  if (summary.length > 320) summary = summary.slice(0, 317).trimEnd() + "...";
+
+  // Pull up to 3 bullet titles from "## Task Decomposition". We bias
+  // toward bullets whose body mentions "higher" exposure, then fall
+  // back to first-listed.
+  let inTaskDecomp = false;
+  const taskBullets: { title: string; raw: string }[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.startsWith("## ")) {
+      if (/task decomposition|task breakdown/i.test(line)) {
+        inTaskDecomp = true;
+        continue;
+      }
+      if (inTaskDecomp) break;
+    }
+    if (!inTaskDecomp) continue;
+    const m = line.match(/^[-*]\s+(.+)$/);
+    if (!m) continue;
+    const body = m[1];
+    // Prefer "**Title** ..." form. Strip bold/colon.
+    const boldMatch = body.match(/^\*\*([^*]+?)\*\*[\s:—-]*(.*)$/);
+    const title = boldMatch ? boldMatch[1].replace(/:\s*$/, "").trim() : body.split(/[—:-]/)[0].trim();
+    taskBullets.push({ title, raw: body });
+  }
+  // Sort: bullets explicitly marked "higher" come first.
+  taskBullets.sort((x, y) => {
+    const xh = /higher|high exposure|automat/i.test(x.raw) ? 0 : 1;
+    const yh = /higher|high exposure|automat/i.test(y.raw) ? 0 : 1;
+    return xh - yh;
+  });
+  for (const t of taskBullets.slice(0, 3)) vulnerable_tasks.push(t.title);
+
+  const locked_sections = [
+    "Detailed task exposure breakdown",
+    "Where AI lands first (top 3 hotspots)",
+    "Your human-edge / leverage map",
+    "Full 90-day action plan",
+    "12-month resilience plan",
+    "Bottom-line guidance",
+    "PDF export / print / share",
+  ];
+
+  return { summary, vulnerable_tasks, locked_sections };
+}
+
+/* Attach a preview payload to a locked analysis response. The Analysis
+ * shape itself is left untouched on the wire — we widen it to include
+ * an optional `preview` field that the client renders alongside the
+ * redacted markdown. */
+function withPreviewIfLocked(a: Analysis): Analysis & { preview?: AnalysisPreview } {
+  if (!a.is_locked) return a;
+  const preview = buildAnalysisPreview(a);
+  return { ...sanitizeAnalysisForResponse(a), preview };
 }
 
 /* Build a best-effort absolute URL for the current site from a request.
@@ -277,6 +383,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   const limitLinkedinImport = rateLimit({
     scope: "linkedin-import",
     max: 10,
+    windowMs: 60_000,
+    keyFn: keyByIp,
+  });
+  const limitFeedback = rateLimit({
+    scope: "feedback",
+    max: 5,
     windowMs: 60_000,
     keyFn: keyByIp,
   });
@@ -908,7 +1020,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = getCurrentUserId(req);
     if (id == null) return res.status(401).json({ error: "Not signed in" });
     const list = await storage.listAnalyses(id);
-    res.json(list.map(sanitizeAnalysisForResponse));
+    res.json(list.map(withPreviewIfLocked));
   });
 
   app.get("/api/analyses/:id", async (req: Request, res: Response) => {
@@ -922,7 +1034,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (a.created_by !== actor.id && actor.role !== "admin") {
       return res.status(404).json({ error: "Not found" });
     }
-    res.json(sanitizeAnalysisForResponse(a));
+    res.json(withPreviewIfLocked(a));
   });
 
   app.delete("/api/analyses/:id", async (req: Request, res: Response) => {
@@ -1040,8 +1152,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       // For locked saves, never echo the readable body back to the client.
       // The full markdown is preserved in storage so /unlock can reveal it
-      // after a credit is spent or an entitlement is granted.
-      res.json(sanitizeAnalysisForResponse(saved));
+      // after a credit is spent or an entitlement is granted. The locked
+      // response is widened with a small free-preview payload (overall
+      // summary + top vulnerable tasks + names of locked sections) so the
+      // client can render a useful teaser instead of pure blur.
+      res.json(withPreviewIfLocked(saved));
     } catch (err: any) {
       if (err?.name === "AbortError") {
         return res.status(499).json({ error: "Aborted" });
@@ -1431,6 +1546,82 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       credits_added: FREE_CREDITS_PROMO_AMOUNT,
       unlimited: false,
     });
+  });
+
+  /* --------------- Analysis feedback ---------------
+   *
+   * POST /api/feedback/analysis is called by the post-preview survey
+   * modal. The client only sends `rating` (1-5), an optional
+   * `comment`, and the `analysis_id` the rating is about. The server
+   * looks up everything else (user email, job title, locked state) so
+   * the client cannot forge fields and cannot redirect feedback to an
+   * arbitrary recipient.
+   *
+   * The recipient address is fixed server-side via the
+   * ANALYSIS_FEEDBACK_TO env var (defaults to roqueta.alex@gmail.com).
+   * The route is rate-limited per-IP at 5 submissions / minute to
+   * deter abuse.
+   *
+   * If no email provider is configured we still return 200 — the
+   * feedback is logged to the server console so it can be reviewed
+   * out-of-band. */
+  app.post("/api/feedback/analysis", limitFeedback, async (req: Request, res: Response) => {
+    const parsed = analysisFeedbackSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      return res.status(400).json({ error: first?.message ?? "Invalid input" });
+    }
+    const recipient =
+      (process.env.ANALYSIS_FEEDBACK_TO ?? "").trim() || "roqueta.alex@gmail.com";
+
+    // Pull session-bound identity. Anonymous (signed-out) feedback is
+    // still accepted — we just omit user fields from the email body.
+    const actorId = getCurrentUserId(req);
+    const me = actorId != null ? await storage.getUser(actorId) : undefined;
+
+    // Look up the referenced analysis. Owner-or-admin gate matches
+    // the rest of the API: never leak someone else's analysis. If the
+    // user is signed out, we skip the lookup entirely (anonymous
+    // feedback ships without job_title / locked state).
+    let job_title: string | null = null;
+    let was_locked = false;
+    let analysis_id: number | null = null;
+    if (parsed.data.analysis_id != null && me) {
+      const a = await storage.getAnalysis(parsed.data.analysis_id);
+      if (a && (a.created_by === me.id || me.role === "admin")) {
+        job_title = a.job_title;
+        was_locked = Boolean(a.is_locked);
+        analysis_id = a.id;
+      }
+    }
+
+    const ua = req.get("user-agent") ?? "";
+    const baseUrl = inferBaseUrlFromRequest(req);
+    const source_url = baseUrl ? `${baseUrl}/#/analyze` : null;
+
+    try {
+      const result = await sendAnalysisFeedbackEmail({
+        to: recipient,
+        rating: parsed.data.rating,
+        comment: parsed.data.comment || "",
+        user_id: me?.id ?? null,
+        user_email: me?.email ?? null,
+        job_title,
+        analysis_id,
+        was_locked,
+        source_url,
+        user_agent: ua.slice(0, 240),
+        timestamp: new Date().toISOString(),
+      });
+      // Always return ok=true — losing user feedback to an upstream
+      // 4xx/5xx would be a worse experience than the user not knowing
+      // the email failed (it's still logged server-side).
+      res.json({ ok: true, delivered: result.delivered });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[feedback] unexpected send error: ${reason}`);
+      res.json({ ok: true, delivered: false });
+    }
   });
 
   /* --------------- Config / health --------------- */

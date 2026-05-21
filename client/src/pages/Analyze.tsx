@@ -468,7 +468,9 @@ export default function Analyze() {
             Will AI <span className="text-gradient">reshape</span> your role?
           </h1>
           <p className="text-sm text-muted-foreground max-w-xl">
-            Generate a data-driven assessment of automation risk, where AI lands first, and a concrete 90-day action plan.
+            Get your free AI job-risk preview — overall exposure score, short summary,
+            and the most vulnerable tasks. Unlock the full AI Exposure Report (detailed
+            task breakdown, skills to build, 90-day action plan, PDF export) for $3.
           </p>
         </div>
       </div>

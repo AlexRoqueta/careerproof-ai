@@ -215,6 +215,12 @@ export const EVENTS = {
   checkout_started: "checkout_started",
   checkout_success: "checkout_success",
   sample_report_viewed: "sample_report_viewed",
+  // Free-preview / feedback funnel
+  preview_viewed: "preview_viewed",
+  unlock_cta_clicked: "unlock_cta_clicked",
+  feedback_shown: "feedback_shown",
+  feedback_submitted: "feedback_submitted",
+  feedback_dismissed: "feedback_dismissed",
 } as const;
 
 /* Map our funnel events to Meta standard events where the semantic

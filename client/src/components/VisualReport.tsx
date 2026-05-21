@@ -777,7 +777,7 @@ function LockedOverlay() {
       data-testid="locked-overlay"
     >
       <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-300 backdrop-blur">
-        Body locked — unlock to read full analysis
+        Free preview — unlock the full AI Exposure Report
       </div>
     </div>
   );
