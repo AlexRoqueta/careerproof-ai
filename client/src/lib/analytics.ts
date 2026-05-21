@@ -107,6 +107,12 @@ function loadGA(id: string) {
   // @ts-ignore — gtag's stub accepts the literal "js" command with a Date.
   window.gtag("js", new Date());
   window.gtag("config", id, { send_page_view: true });
+  if (env.DEV) {
+    // Dev-only signal that GA wired up. Helps confirm the env var was
+    // read at build time — without this, a silent "no env" looks the
+    // same as "GA not firing". Stripped from production by Vite.
+    console.info("[analytics] GA4 initialized:", id);
+  }
 }
 
 function loadPostHog(key: string, host: string) {
