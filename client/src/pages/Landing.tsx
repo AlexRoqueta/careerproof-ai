@@ -467,25 +467,29 @@ function InputMethods() {
       icon: <TypeIcon className="h-5 w-5" />,
       title: "Type a job title",
       body: "Just start with your role. AI fills the rest — responsibilities, common skills, seniority context.",
-      badge: "Fastest",
-    },
-    {
-      icon: <FileText className="h-5 w-5" />,
-      title: "Upload a resume",
-      body: "Drop in a DOCX or PDF. We pull out your real experience for a more accurate read.",
-      badge: "PDF · DOCX",
-    },
-    {
-      icon: <Linkedin className="h-5 w-5" />,
-      title: "Import from LinkedIn",
-      body: "Paste your LinkedIn profile and we'll clean it up automatically — no scraping, no creds.",
-      badge: "Recommended",
+      badge: "No account needed",
+      accountRequired: false,
     },
     {
       icon: <Briefcase className="h-5 w-5" />,
       title: "Or roll your own",
       body: "Manually describe your role, responsibilities, and skills if you'd rather start from scratch.",
-      badge: "Flexible",
+      badge: "No account needed",
+      accountRequired: false,
+    },
+    {
+      icon: <FileText className="h-5 w-5" />,
+      title: "Upload a resume",
+      body: "Drop in a DOCX or PDF. We pull out your real experience for a more accurate read.",
+      badge: "Free account required",
+      accountRequired: true,
+    },
+    {
+      icon: <Linkedin className="h-5 w-5" />,
+      title: "Import from LinkedIn",
+      body: "Paste your LinkedIn profile and we'll clean it up automatically — no scraping, no creds.",
+      badge: "Free account required",
+      accountRequired: true,
     },
   ];
   return (
@@ -496,6 +500,11 @@ function InputMethods() {
           <h2 className="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight">
             Begin in whatever way is fastest for you.
           </h2>
+          <p className="mt-4 text-muted-foreground text-base leading-relaxed">
+            Start your <strong className="text-foreground/90">free AI job-risk preview without an account</strong> using a
+            job title or a quick manual description. Want a more accurate read from your real experience? <strong className="text-foreground/90">Create a
+            free account</strong> to upload a resume or import your LinkedIn profile.
+          </p>
         </div>
         <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {methods.map((m, i) => (
@@ -507,11 +516,18 @@ function InputMethods() {
               transition={{ duration: 0.45, delay: i * 0.06 }}
             >
               <Card className="h-full border-border/60 bg-card/60 backdrop-blur p-5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div className="inline-flex items-center justify-center h-9 w-9 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-400/20">
                     {m.icon}
                   </div>
-                  <span className="text-[10px] uppercase tracking-wider font-semibold text-cyan-300/90 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-400/30">
+                  <span
+                    className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${
+                      m.accountRequired
+                        ? "text-amber-200/90 bg-amber-500/10 border-amber-400/30"
+                        : "text-cyan-300/90 bg-cyan-500/10 border-cyan-400/30"
+                    }`}
+                  >
+                    {m.accountRequired && <Lock className="inline h-2.5 w-2.5 mr-1 -mt-0.5" />}
                     {m.badge}
                   </span>
                 </div>
@@ -521,6 +537,10 @@ function InputMethods() {
             </motion.div>
           ))}
         </div>
+        <p className="mt-6 text-xs text-muted-foreground max-w-2xl">
+          Either way, your <strong className="text-foreground/80">first AI job-risk preview is free</strong>. The
+          full AI Exposure Report unlocks for $3 (one credit) inside your account.
+        </p>
       </div>
     </section>
   );
@@ -541,12 +561,16 @@ function SampleReport() {
             A practical, role-specific brief. Not a list of buzzwords. Every report is anchored to
             your inputs, with clear signals you can act on this quarter.
           </p>
-          <ul className="mt-6 space-y-3">
+          <p className="mt-6 text-xs uppercase tracking-[0.18em] font-semibold text-cyan-300/90">
+            What the full AI Exposure Report will get you
+          </p>
+          <ul className="mt-3 space-y-3">
             {[
               "Overall AI-exposure score with confidence band",
-              "Task-level breakdown: automatable vs. AI-augmentable",
-              "Top 3 skills worth building over the next 12 months",
-              "Adjacent roles where your experience compounds",
+              "Full task-level breakdown: automatable vs. AI-augmentable",
+              "Personalized skills-to-build plan over the next 12 months",
+              "Safer next moves — adjacent roles where your experience compounds",
+              "A concrete 30 / 60 / 90-day action plan you can start this week",
               "Risk caveats specific to your industry and seniority",
             ].map((line, i) => (
               <li key={i} className="flex items-start gap-2.5 text-sm">
@@ -730,6 +754,10 @@ function FAQSection() {
     {
       q: "Do I need to pay to try it?",
       a: "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.",
+    },
+    {
+      q: "Do I need an account to start?",
+      a: "No — you can start the free preview using a job title or a quick manual description with no account. A free account is only required to upload a resume, import your LinkedIn profile, save your preview, or unlock the full AI Exposure Report.",
     },
     {
       q: "Can I analyze a role I'm thinking about taking?",

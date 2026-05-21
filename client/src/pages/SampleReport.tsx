@@ -34,7 +34,11 @@ export default function SampleReport() {
 
   function goSignup(source: string) {
     track(EVENTS.landing_cta_click, { source: `sample_report_${source}` });
-    setLocation("/signin");
+    // Route into the anonymous preview flow so visitors can generate a
+    // free AI job-risk preview without creating an account first. Sign-up
+    // is only requested when they want to save the preview or unlock the
+    // full report.
+    setLocation("/analyze");
     window.scrollTo({ top: 0, behavior: "auto" });
   }
 
@@ -58,7 +62,7 @@ export default function SampleReport() {
             className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-lg shadow-sky-500/20"
             data-testid="button-sample-start"
           >
-            Get my free first report
+            Start my free preview
             <ArrowRight className="ml-1 h-4 w-4" />
           </Button>
         </div>
@@ -75,6 +79,11 @@ export default function SampleReport() {
           <p className="mt-4 text-base sm:text-lg text-muted-foreground">
             This is a real, full-length sample report for a Senior Financial Analyst — built from
             static example data so you can scroll through every section before you sign up.
+          </p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Your own free AI job-risk preview runs without an account. A free account is only
+            required to upload a resume, import a LinkedIn profile, save your preview, or unlock
+            the full AI Exposure Report ($3 — one credit).
           </p>
           <p className="mt-3 text-xs text-amber-300/90 inline-flex items-center gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5" />
@@ -392,7 +401,9 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
           </span>
         </h2>
         <p className="mt-3 text-muted-foreground text-sm sm:text-base max-w-2xl mx-auto">
-          Your first AI exposure report is free. No subscription. One credit = one full report.
+          Start the free AI job-risk preview without an account. Sign up only when you want to
+          connect a resume or LinkedIn profile, save your preview, or unlock the full report.
+          No subscription. One credit = one full AI Exposure Report.
         </p>
         <div className="mt-5 flex flex-col sm:flex-row items-center justify-center gap-3">
           <Button
@@ -401,7 +412,7 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
             className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
             data-testid="button-sample-final-cta"
           >
-            Get my free first report
+            Start my free preview
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>

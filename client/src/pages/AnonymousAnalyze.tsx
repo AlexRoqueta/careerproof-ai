@@ -292,14 +292,17 @@ export default function AnonymousAnalyze() {
               <Info className="w-4 h-4" />
               <AlertTitle>Want to use a resume or LinkedIn profile?</AlertTitle>
               <AlertDescription>
-                Resume upload and LinkedIn import are available after you{" "}
+                Resume upload and LinkedIn profile import are account-only features. The free
+                preview on this page runs on a job title plus the basic details above — no
+                account needed.{" "}
                 <button
                   className="underline underline-offset-2 font-medium"
                   onClick={() => goSignIn("save", "anon_resume_hint")}
                 >
-                  create a free account
-                </button>
-                . The free preview itself doesn't need one.
+                  Create a free account
+                </button>{" "}
+                to connect a resume or LinkedIn profile for a more accurate read, save your
+                preview, and unlock the full AI Exposure Report.
               </AlertDescription>
             </Alert>
           </CardContent>
@@ -383,8 +386,9 @@ const AnonymousPreviewView = ({
           <AlertTitle>Your free AI job-risk preview</AlertTitle>
           <AlertDescription>
             This preview is yours, no account needed.{" "}
-            <strong>Create a free account</strong> to save it, view it later, or unlock the full
-            AI Exposure Report.
+            <strong>Create a free account</strong> to save it, view it later, connect a resume or
+            LinkedIn profile for a more accurate read, or unlock the full AI Exposure Report
+            ($3 — one credit).
           </AlertDescription>
         </Alert>
 

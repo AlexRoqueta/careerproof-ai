@@ -194,10 +194,39 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
               <p className="text-xs sm:text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 You're seeing your AI exposure score and a short summary. Buy a
                 credit pack and we'll bring you straight back to this report and
-                unlock it automatically — no rerun. You'll get your detailed task
-                breakdown, the skills to build, the safer next moves, a 90-day
-                action plan, and PDF export.
+                unlock it automatically — no rerun.
               </p>
+              <div className="mt-3 rounded-lg border border-cyan-400/20 bg-background/30 p-3">
+                <p className="text-[11px] uppercase tracking-wider font-semibold text-cyan-300/90">
+                  What the full AI Exposure Report will get you
+                </p>
+                <ul className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs text-foreground/85">
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    Full task-by-task breakdown
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    Personalized skills-to-build plan
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    Safer next moves (adjacent roles)
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    30 / 60 / 90-day action plan
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    PDF export &amp; shareable link
+                  </li>
+                  <li className="flex items-start gap-1.5">
+                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
+                    Rerun with resume or LinkedIn import
+                  </li>
+                </ul>
+              </div>
 
               {preview?.summary && (
                 <p className="mt-3 rounded-lg border border-border/60 bg-background/40 p-3 text-sm leading-relaxed" data-testid="text-preview-summary">
