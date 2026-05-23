@@ -575,6 +575,19 @@ export default function Credits() {
         </Alert>
       )}
 
+      <Alert
+        data-testid="alert-value-compare"
+        className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-sky-500/10 to-violet-500/10"
+      >
+        <Sparkles className="w-4 h-4" />
+        <AlertTitle>Why $3?</AlertTitle>
+        <AlertDescription>
+          A personalized career-risk review from a coach or counselor could cost
+          $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
+          role-specific AI Exposure Report for just $3.
+        </AlertDescription>
+      </Alert>
+
       <p className="text-xs text-muted-foreground" data-testid="text-trust">
         No subscription required · One credit = one full report · Secure checkout powered by Stripe ·
         Directional career-risk insight, not a guarantee.

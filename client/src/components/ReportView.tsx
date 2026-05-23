@@ -228,6 +228,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                 <p className="mt-3 text-[11px] text-cyan-200/90 font-medium">
                   Unlock the full report for less than a latte — $3.
                 </p>
+                <p className="mt-1.5 text-[11px] text-muted-foreground leading-relaxed">
+                  A personalized career-risk review from a coach or counselor could cost
+                  $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
+                  role-specific AI Exposure Report for just $3.
+                </p>
               </div>
 
               {preview?.summary && (

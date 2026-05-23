@@ -486,6 +486,11 @@ const AnonymousPreviewView = ({
             Your preview is saved to your account as soon as you sign up — no need to re-enter
             anything.
           </p>
+          <p className="mt-2 text-[11px] text-muted-foreground leading-relaxed">
+            A personalized career-risk review from a coach or counselor could cost
+            $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
+            role-specific AI Exposure Report for just $3.
+          </p>
         </Card>
       </div>
     </div>

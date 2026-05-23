@@ -168,6 +168,10 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
               Get your first AI job-risk preview free. Unlock the full report for less than a latte — $3.
             </p>
           </div>
+          <p className="mt-3 text-xs sm:text-sm text-muted-foreground max-w-2xl leading-relaxed">
+            A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
+            CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+          </p>
           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <Button
               onClick={onStart}
@@ -541,6 +545,10 @@ function InputMethods() {
           Either way, your <strong className="text-foreground/80">first AI job-risk preview is free</strong>. The
           full AI Exposure Report unlocks for $3 (one credit) inside your account.
         </p>
+        <p className="mt-3 text-xs text-muted-foreground max-w-2xl leading-relaxed">
+          A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
+          CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+        </p>
       </div>
     </section>
   );
@@ -814,6 +822,10 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
             </h2>
             <p className="mt-4 text-muted-foreground text-base sm:text-lg max-w-2xl mx-auto">
               Get your free AI job-risk preview in under a minute. No account needed to start. No credit card. Your data stays yours.
+            </p>
+            <p className="mt-4 text-sm sm:text-base text-foreground/85 max-w-2xl mx-auto leading-relaxed">
+              A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
+              CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
             </p>
             <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
               <Button

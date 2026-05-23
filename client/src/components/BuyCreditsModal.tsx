@@ -35,7 +35,11 @@ export function BuyCreditsModal({ open, onOpenChange, targetAnalysisId }: Props)
               : "One credit unlocks one full report — tasks most exposed to AI, skills that make you harder to replace, AI tools to learn now, safer career moves to consider, and a 30 / 60 / 90-day plan. Less than a latte — $3 for 1 report ($7 for 3, $10 for 5)."}
           </DialogDescription>
         </DialogHeader>
-        <div className="text-xs text-muted-foreground -mt-2 mb-2">
+        <div className="text-xs text-foreground/80 -mt-2 leading-relaxed">
+          A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
+          CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+        </div>
+        <div className="text-xs text-muted-foreground mt-1 mb-2">
           No subscription required · One credit = one full report · Secure checkout powered by Stripe.
         </div>
         <div className="flex gap-2 justify-end">
