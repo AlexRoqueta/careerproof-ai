@@ -261,13 +261,17 @@ export default function Credits() {
           already: data.already_processed,
         });
         if (!data.already_processed) {
-          track(EVENTS.checkout_success, {
+          const purchaseParams = {
             provider: data.provider ?? "preview",
             credits_added: credits,
             package_id: data.package?.id,
             value: data.package ? data.package.price_cents / 100 : undefined,
             currency: data.package?.currency ?? "USD",
-          });
+          };
+          track(EVENTS.checkout_success, purchaseParams);
+          // Alias as `purchase` so platforms expecting that canonical
+          // funnel name (and Meta's Purchase standard event) light up.
+          track(EVENTS.purchase, purchaseParams);
         }
         if (data.already_processed) {
           setPendingStripeSession(null);
@@ -358,10 +362,12 @@ export default function Credits() {
     const match = txs.find((t) => t.reference === ref && t.reason === "purchase");
     if (match) {
       setCompletionStatus({ kind: "success", credits: match.amount_delta, already: false });
-      track(EVENTS.checkout_success, {
+      const purchaseParams = {
         provider: "stripe",
         credits_added: match.amount_delta,
-      });
+      };
+      track(EVENTS.checkout_success, purchaseParams);
+      track(EVENTS.purchase, purchaseParams);
       setPendingStripeSession(null);
     }
   }, [pendingStripeSession, transactionsQuery.data]);

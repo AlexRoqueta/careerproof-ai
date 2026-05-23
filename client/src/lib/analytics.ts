@@ -217,7 +217,10 @@ export const EVENTS = {
   sample_report_viewed: "sample_report_viewed",
   // Free-preview / feedback funnel
   preview_viewed: "preview_viewed",
+  preview_report_viewed: "preview_report_viewed",
   unlock_cta_clicked: "unlock_cta_clicked",
+  unlock_report_clicked: "unlock_report_clicked",
+  purchase: "purchase",
   feedback_shown: "feedback_shown",
   feedback_submitted: "feedback_submitted",
   feedback_dismissed: "feedback_dismissed",
@@ -240,6 +243,7 @@ const META_STANDARD_EVENTS: Record<string, string> = {
   signup_completed: "CompleteRegistration",
   checkout_started: "InitiateCheckout",
   checkout_success: "Purchase",
+  purchase: "Purchase",
 };
 
 /** Convenience: tag the active visitor (e.g. after sign-in) where the

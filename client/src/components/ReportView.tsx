@@ -101,10 +101,12 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
       risk_score: analysis.risk_score,
     });
     if (isLocked) {
-      track(EVENTS.preview_viewed, {
+      const previewParams = {
         analysis_id: analysis.id,
         risk_score: analysis.risk_score,
-      });
+      };
+      track(EVENTS.preview_viewed, previewParams);
+      track(EVENTS.preview_report_viewed, previewParams);
     }
   }, [analysis.id, isLocked, analysis.risk_score]);
 
@@ -185,47 +187,47 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm font-semibold text-foreground">
-                  Free AI job-risk preview
+                  Your free AI job-risk preview is ready.
                 </p>
                 <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-300">
                   <Lock className="w-3 h-3 mr-1" /> Full report locked
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1.5 leading-relaxed">
-                You're seeing your AI exposure score and a short summary. Buy a
-                credit pack and we'll bring you straight back to this report and
-                unlock it automatically — no rerun.
+                You're seeing your AI exposure score, a short summary, and the
+                tasks most likely to be exposed. Unlock the full AI Exposure
+                Report — for less than a latte — and we'll bring you straight
+                back to this exact report. No rerun, no re-entry.
               </p>
               <div className="mt-3 rounded-lg border border-cyan-400/20 bg-background/30 p-3">
                 <p className="text-[11px] uppercase tracking-wider font-semibold text-cyan-300/90">
-                  What the full AI Exposure Report will get you
+                  Unlock the full AI Exposure Report to see:
                 </p>
                 <ul className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs text-foreground/85">
                   <li className="flex items-start gap-1.5">
                     <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    Full task-by-task breakdown
+                    Tasks in your role most exposed to AI
                   </li>
                   <li className="flex items-start gap-1.5">
                     <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    Personalized skills-to-build plan
+                    Skills that make you harder to replace
                   </li>
                   <li className="flex items-start gap-1.5">
                     <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    Safer next moves (adjacent roles)
+                    AI tools to learn now
                   </li>
                   <li className="flex items-start gap-1.5">
                     <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    30 / 60 / 90-day action plan
+                    Safer career moves to consider
                   </li>
-                  <li className="flex items-start gap-1.5">
+                  <li className="flex items-start gap-1.5 sm:col-span-2">
                     <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    PDF export &amp; shareable link
-                  </li>
-                  <li className="flex items-start gap-1.5">
-                    <Sparkles className="w-3 h-3 mt-0.5 text-cyan-300 shrink-0" />
-                    Rerun with resume or LinkedIn import
+                    A 30 / 60 / 90-day plan to stay ahead
                   </li>
                 </ul>
+                <p className="mt-3 text-[11px] text-cyan-200/90 font-medium">
+                  Unlock the full report for less than a latte — $3.
+                </p>
               </div>
 
               {preview?.summary && (
@@ -283,6 +285,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                         analysis_id: analysis.id,
                         method: unlimited ? "entitlement" : "credit",
                       });
+                      track(EVENTS.unlock_report_clicked, {
+                        source: "preview_banner",
+                        analysis_id: analysis.id,
+                        method: unlimited ? "entitlement" : "credit",
+                      });
                       unlockMutation.mutate();
                     }}
                     disabled={unlockMutation.isPending}
@@ -293,7 +300,7 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                     ) : (
                       <Sparkles className="w-3.5 h-3.5 mr-1.5" />
                     )}
-                    {unlimited ? "Unlock the full AI Exposure Report" : "Use 1 credit to unlock"}
+                    {unlimited ? "Unlock My Full Report" : "Unlock My Full Report (1 credit)"}
                   </Button>
                 ) : (
                   <Button
@@ -304,17 +311,22 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                         analysis_id: analysis.id,
                         method: "buy",
                       });
+                      track(EVENTS.unlock_report_clicked, {
+                        source: "preview_banner",
+                        analysis_id: analysis.id,
+                        method: "buy",
+                      });
                       track(EVENTS.buy_credits_clicked, { source: "locked_report" });
                       setBuyOpen(true);
                     }}
                     data-testid="button-buy-credits-unlock"
                   >
                     <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Unlock the full AI Exposure Report
+                    Unlock My Full Report
                   </Button>
                 )}
                 <span className="self-center text-[11px] text-muted-foreground">
-                  From $3 · One credit = one full report
+                  Less than a latte — $3 · One credit = one full report
                 </span>
               </div>
             </div>

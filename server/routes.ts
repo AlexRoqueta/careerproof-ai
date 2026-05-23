@@ -193,13 +193,15 @@ function buildAnalysisPreview(a: Pick<Analysis, "result_text">): AnalysisPreview
   });
   for (const t of taskBullets.slice(0, 3)) vulnerable_tasks.push(t.title);
 
+  // Spec-aligned bullets for the locked-report conversion screen. These
+  // mirror what the upsell copy promises so the user sees the same
+  // promises in the side rail of locked sections as in the headline.
   const locked_sections = [
-    "Detailed task exposure breakdown",
-    "Where AI lands first (top 3 hotspots)",
-    "Your human-edge / leverage map",
-    "Full 90-day action plan",
-    "12-month resilience plan",
-    "Bottom-line guidance",
+    "Tasks in your role most exposed to AI",
+    "Skills that make you harder to replace",
+    "AI tools to learn now",
+    "Safer career moves to consider",
+    "A 30 / 60 / 90-day plan to stay ahead",
     "PDF export / print / share",
   ];
 

@@ -26,13 +26,13 @@ export function BuyCreditsModal({ open, onOpenChange, targetAnalysisId }: Props)
           </div>
           <DialogTitle>
             {fromLockedReport
-              ? "Buy credits to unlock this report"
+              ? "Unlock My Full Report"
               : "Unlock the full AI Exposure Report"}
           </DialogTitle>
           <DialogDescription>
             {fromLockedReport
-              ? "Your preview is saved. Buying any credit pack will return you to this exact report and unlock it automatically — you won't need to rerun the analysis. From $3 for 1 report ($7 for 3, $10 for 5)."
-              : "One credit unlocks one full report — detailed task breakdown, skills to build, safer next moves, 90-day action plan, and PDF export. Start at $3 for 1 report ($7 for 3, $10 for 5)."}
+              ? "Your preview is saved. Pick a credit pack and we'll bring you straight back to this exact report and unlock it automatically — no rerun, no re-entry. Less than a latte — $3 for 1 report ($7 for 3, $10 for 5)."
+              : "One credit unlocks one full report — tasks most exposed to AI, skills that make you harder to replace, AI tools to learn now, safer career moves to consider, and a 30 / 60 / 90-day plan. Less than a latte — $3 for 1 report ($7 for 3, $10 for 5)."}
           </DialogDescription>
         </DialogHeader>
         <div className="text-xs text-muted-foreground -mt-2 mb-2">
@@ -52,7 +52,7 @@ export function BuyCreditsModal({ open, onOpenChange, targetAnalysisId }: Props)
               }}
               data-testid="button-go-to-credits"
             >
-              View packages
+              {fromLockedReport ? "Unlock My Full Report" : "View packages"}
             </Button>
           </Link>
         </div>

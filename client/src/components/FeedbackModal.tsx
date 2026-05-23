@@ -109,11 +109,12 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-primary" />
-            Was this analysis useful?
+            Was this AI job-risk preview useful?
           </DialogTitle>
           <DialogDescription>
-            Rate your free preview so we know what's landing — and what to
-            improve before you unlock the full report.
+            Tap a star — 1 = not useful, 3 = somewhat useful, 5 = very
+            useful. Your rating helps us decide what to improve before you
+            unlock the full report.
           </DialogDescription>
         </DialogHeader>
 
@@ -163,7 +164,7 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
             </label>
             <Textarea
               id="feedback-comment"
-              placeholder="What would make this more useful for your career planning?"
+              placeholder="What would make this report more valuable?"
               value={comment}
               onChange={(e) => setComment(e.target.value.slice(0, 2000))}
               rows={3}
