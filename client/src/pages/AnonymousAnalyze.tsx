@@ -289,21 +289,23 @@ export default function AnonymousAnalyze() {
                 data-testid="input-tech-context"
               />
             </div>
-            <Alert className="border-primary/20 bg-primary/[0.03]">
+            <Alert
+              className="border-primary/20 bg-primary/[0.03]"
+              data-testid="alert-manual-accuracy-tip"
+            >
               <Info className="w-4 h-4" />
-              <AlertTitle>Want to use a resume or LinkedIn profile?</AlertTitle>
+              <AlertTitle>Tip: get a more accurate read</AlertTitle>
               <AlertDescription>
-                Resume upload and LinkedIn profile import are account-only features. The free
-                preview on this page runs on a job title plus the basic details above — no
-                account needed.{" "}
+                A job title can start your preview, but your analysis is more accurate when
+                you upload a resume or import your LinkedIn profile. Those options unlock
+                after you{" "}
                 <button
                   className="underline underline-offset-2 font-medium"
                   onClick={() => goSignIn("save", "anon_resume_hint")}
                 >
-                  Create a free account
-                </button>{" "}
-                to connect a resume or LinkedIn profile for a more accurate read, save your
-                preview, and unlock the full AI Exposure Report.
+                  create a free account
+                </button>
+                .
               </AlertDescription>
             </Alert>
           </CardContent>

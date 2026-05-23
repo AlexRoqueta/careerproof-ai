@@ -798,6 +798,19 @@ export default function Analyze() {
                     </div>
                   </div>
 
+                  <Alert
+                    className="border-primary/20 bg-primary/[0.03]"
+                    data-testid="alert-manual-accuracy-tip"
+                  >
+                    <Info className="w-4 h-4" />
+                    <AlertTitle>Tip: get a more accurate read</AlertTitle>
+                    <AlertDescription>
+                      A job title can start your preview, but your analysis is more accurate
+                      when you upload a resume or import your LinkedIn profile from the panels
+                      above.
+                    </AlertDescription>
+                  </Alert>
+
                   <FieldWithMic
                     id="job_title"
                     label="Job title"
