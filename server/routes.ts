@@ -41,6 +41,8 @@ import {
   findCreditPackage,
 } from "@shared/entitlements";
 import { paymentProvider } from "./payments";
+import { getLaunchPromoState } from "./launchPromo";
+import { promoReferenceSuffix, getLaunchPromoCopy } from "@shared/launchPromo";
 import type { CreditTransaction } from "@shared/schema";
 import {
   generateAnalysis,
@@ -1313,7 +1315,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * provider returns a loopback URL; the live providers (Stripe, Lemon
    * Squeezy) are stubbed until the operator wires credentials.
    * ===================================================================== */
-  app.get("/api/payments/packages", (_req: Request, res: Response) => {
+  app.get("/api/payments/packages", async (_req: Request, res: Response) => {
+    const launchPromo = await getLaunchPromoState();
+    const launchPromoCopy = getLaunchPromoCopy(launchPromo);
     res.json({
       packages: CREDIT_PACKAGES,
       provider: {
@@ -1321,6 +1325,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         display_name: paymentProvider.displayName,
         is_preview: paymentProvider.isPreview,
       },
+      launch_promo: launchPromo,
+      launch_promo_copy: launchPromoCopy,
     });
   });
 
@@ -1391,6 +1397,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         package: pkg,
         provider: result.provider,
         preview: result.preview,
+        // Effective per-checkout pricing (cents). Differs from
+        // pkg.price_cents when the launch promo discount was applied to
+        // the starter_1 package — the client uses this for analytics
+        // event props (value, currency, promo_*) so funnel reports
+        // attribute promo sales correctly.
+        amount_cents: result.amount_cents,
+        promo_applied: result.promo_applied,
+        promo_name: result.promo_name,
         // Only populated when the active provider is the preview stub.
         // Live providers never include a `preview_completion` payload.
         preview_completion: previewSession,
@@ -1425,6 +1439,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const session_id = String(req.body?.session_id ?? "");
     const token = String(req.body?.token ?? "");
+    // Optional client-supplied promo tag. We re-resolve the server-side
+    // promo state below and only honor a matching name; the client can
+    // never invent a tag that wasn't active at create-checkout time.
+    const clientPromo = String(req.body?.promo ?? "").trim();
     if (!session_id) return res.status(400).json({ error: "Missing session id" });
 
     try {
@@ -1448,12 +1466,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const reference = `${verify.provider}:checkout_session:${session_id}`;
       const legacyReference = `${verify.provider}:${session_id}`;
       // Idempotency — if this session already produced a ledger row,
-      // return the current user without granting again.
+      // return the current user without granting again. We use prefix
+      // matching because the webhook may have appended a launch-promo
+      // tag (`:promo=<name>`) to the canonical reference; the buyer
+      // who lands back after that point should still see "already
+      // processed" instead of pending.
       const txs = await storage.listCreditTransactions(me.id);
       const existing = txs.find(
         (t) =>
-          (t.reference === reference || t.reference === legacyReference) &&
-          t.reason === "purchase",
+          t.reason === "purchase" &&
+          !!t.reference &&
+          (t.reference === reference ||
+            t.reference === legacyReference ||
+            t.reference.startsWith(`${reference}:`) ||
+            t.reference.startsWith(`${legacyReference}:`)),
       );
       if (existing) {
         const current = await storage.getUser(me.id);
@@ -1478,13 +1504,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
       // Preview-only inline grant.
+      // If the client signaled a promo tag AND the server-side promo
+      // state still names that promo, append the `:promo=<name>` suffix
+      // so the launch-promo count query can pick up this redemption.
+      // We re-check active state here (not just enabled) so a sale that
+      // started while the promo was active but completed after slot 50
+      // would no longer count — keeping the limit honest under concurrent
+      // checkouts.
+      const promoState = await getLaunchPromoState();
+      const shouldTagPromo =
+        clientPromo &&
+        promoState.name === clientPromo &&
+        verify.package.id === promoState.target_package_id;
+      const previewReference = shouldTagPromo
+        ? `${legacyReference}${promoReferenceSuffix(promoState.name)}`
+        : legacyReference;
       const updated = await storage.setUserCredits(me.id, me.credits + verify.package.credits);
       await storage.appendCreditTransaction({
         user_id: me.id,
         amount_delta: verify.package.credits,
         balance_after: updated?.credits ?? me.credits + verify.package.credits,
         reason: "purchase",
-        reference: legacyReference,
+        reference: previewReference,
         provider: verify.provider,
         created_at: new Date().toISOString(),
       });
@@ -1493,6 +1534,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         credits_added: verify.package.credits,
         already_processed: false,
         package: verify.package,
+        promo_applied: shouldTagPromo,
+        promo_name: shouldTagPromo ? promoState.name : null,
       });
     } catch (err: any) {
       console.error("payments.completeCheckout failed", err);
@@ -1547,7 +1590,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ received: true, event_id: parsed.event_id, fulfilled: false });
     }
     const f = parsed.fulfillment;
-    const reference = `stripe:checkout_session:${f.session_id}`;
+    /* Tag the ledger reference with the promo suffix when the session
+     * was created under the launch promo. The webhook is the
+     * authoritative grant path for Stripe — appending the tag here is
+     * what makes `countPurchasesByReferenceSubstring(":promo=launch50")`
+     * return the right number on subsequent /api/payments/packages
+     * calls so the slot count stays accurate. */
+    const reference = f.promo_name
+      ? `stripe:checkout_session:${f.session_id}${promoReferenceSuffix(f.promo_name)}`
+      : `stripe:checkout_session:${f.session_id}`;
     try {
       const user = await storage.getUser(f.user_id);
       if (!user) {

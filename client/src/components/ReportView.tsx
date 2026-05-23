@@ -14,6 +14,9 @@ import { useMe } from "@/hooks/useMe";
 import { hasUnlimitedCredits } from "@shared/entitlements";
 import { VisualReport } from "./VisualReport";
 import { track, EVENTS } from "@/lib/analytics";
+import { useLaunchPromo } from "@/hooks/useLaunchPromo";
+import { formatCents } from "@shared/launchPromo";
+import { LaunchPromoCounter } from "./LaunchPromoCounter";
 
 /* Server-attached payload for locked analyses. Only present when
  * the analysis is locked — it carries a short summary, the top 2-3
@@ -63,6 +66,9 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
   const unlimited = hasUnlimitedCredits(me?.email, me?.role);
   const canSpend = unlimited || (me?.credits ?? 0) > 0;
   const preview = analysis.preview;
+  const { active: promoActive, promo, copy: promoCopy, remaining: promoRemaining } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
 
   const unlockMutation = useMutation({
     mutationFn: async () => {
@@ -195,10 +201,30 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
               </div>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 You're seeing your AI exposure score, a short summary, and the
-                tasks most likely to be exposed. Unlock the full AI Exposure
-                Report — for less than a latte — and we'll bring you straight
-                back to this exact report. No rerun, no re-entry.
+                tasks most likely to be exposed. Unlock the complete roadmap, not
+                just the score — and we'll bring you straight back to this exact
+                report. No rerun, no re-entry.
               </p>
+              {promoActive && (
+                <div
+                  className="mt-3 rounded-lg border border-cyan-400/40 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-3 py-2 text-xs leading-relaxed text-foreground/90"
+                  data-testid="banner-launch-promo"
+                >
+                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                    <p className="font-semibold text-foreground">
+                      {promoCopy?.headline ??
+                        `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`}
+                    </p>
+                    <LaunchPromoCounter
+                      data-testid="text-launch-promo-remaining-locked"
+                    />
+                  </div>
+                  <p className="mt-0.5 text-muted-foreground">
+                    {promoCopy?.includes_line ??
+                      "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
+                  </p>
+                </div>
+              )}
               <div className="mt-3 rounded-lg border border-cyan-400/20 bg-background/30 p-3">
                 <p className="text-[11px] uppercase tracking-wider font-semibold text-cyan-300/90">
                   Unlock the full AI Exposure Report to see:
@@ -226,12 +252,17 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   </li>
                 </ul>
                 <p className="mt-3 text-[11px] text-cyan-200/90 font-medium">
-                  Unlock the full report for less than a latte — $3.
+                  {promoActive
+                    ? `Launch offer — ${promoPrice} today, regular ${regularPrice}.`
+                    : `Unlock the full report for less than a latte — ${regularPrice}.`}
                 </p>
                 <p className="mt-1.5 text-[11px] text-muted-foreground leading-relaxed">
                   A personalized career-risk review from a coach or counselor could cost
                   $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
-                  role-specific AI Exposure Report for just $3.
+                  role-specific AI Exposure Report
+                  {promoActive
+                    ? ` for ${promoPrice} today (regular ${regularPrice}).`
+                    : ` for just ${regularPrice}.`}
                 </p>
               </div>
 
@@ -285,16 +316,20 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   <Button
                     size="sm"
                     onClick={() => {
-                      track(EVENTS.unlock_cta_clicked, {
+                      const props = {
                         source: "preview_banner",
                         analysis_id: analysis.id,
                         method: unlimited ? "entitlement" : "credit",
-                      });
-                      track(EVENTS.unlock_report_clicked, {
-                        source: "preview_banner",
-                        analysis_id: analysis.id,
-                        method: unlimited ? "entitlement" : "credit",
-                      });
+                        promo_active: promoActive,
+                        promo_name: promo?.name ?? null,
+                        promo_price: promo ? promo.promo_price_cents / 100 : undefined,
+                        regular_price: promo ? promo.regular_price_cents / 100 : 3,
+                        promo_limit: promo?.limit,
+                        promo_used: promo?.used,
+                        promo_remaining: promoRemaining ?? undefined,
+                      };
+                      track(EVENTS.unlock_cta_clicked, props);
+                      track(EVENTS.unlock_report_clicked, props);
                       unlockMutation.mutate();
                     }}
                     disabled={unlockMutation.isPending}
@@ -311,27 +346,42 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   <Button
                     size="sm"
                     onClick={() => {
-                      track(EVENTS.unlock_cta_clicked, {
+                      const props = {
                         source: "preview_banner",
                         analysis_id: analysis.id,
                         method: "buy",
+                        promo_active: promoActive,
+                        promo_name: promo?.name ?? null,
+                        promo_price: promo ? promo.promo_price_cents / 100 : undefined,
+                        regular_price: promo ? promo.regular_price_cents / 100 : 3,
+                        promo_limit: promo?.limit,
+                        promo_used: promo?.used,
+                        promo_remaining: promoRemaining ?? undefined,
+                      };
+                      track(EVENTS.unlock_cta_clicked, props);
+                      track(EVENTS.unlock_report_clicked, props);
+                      track(EVENTS.buy_credits_clicked, {
+                        source: "locked_report",
+                        promo_active: promoActive,
+                        promo_name: promo?.name ?? null,
+                        promo_limit: promo?.limit,
+                        promo_used: promo?.used,
+                        promo_remaining: promoRemaining ?? undefined,
                       });
-                      track(EVENTS.unlock_report_clicked, {
-                        source: "preview_banner",
-                        analysis_id: analysis.id,
-                        method: "buy",
-                      });
-                      track(EVENTS.buy_credits_clicked, { source: "locked_report" });
                       setBuyOpen(true);
                     }}
                     data-testid="button-buy-credits-unlock"
                   >
                     <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Unlock My Full Report
+                    {promoActive
+                      ? `Unlock My Report for ${promoPrice}`
+                      : `Unlock My Full Report for ${regularPrice}`}
                   </Button>
                 )}
                 <span className="self-center text-[11px] text-muted-foreground">
-                  Less than a latte — $3 · One credit = one full report
+                  {promoActive
+                    ? `${promoPrice} today · regular ${regularPrice}`
+                    : `Less than a latte — ${regularPrice} · One credit = one full report`}
                 </span>
               </div>
             </div>
@@ -354,22 +404,32 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   Want to unlock another full report?
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  $3 for 1 · $7 for 3 · $10 for 5. No subscription — one credit unlocks
-                  one full report. Secure checkout powered by Stripe.
+                  {promoActive
+                    ? `Launch offer — ${promoPrice} for your next single report (regular ${regularPrice}). $7 for 3 · $10 for 5. No subscription — one credit unlocks one full report.`
+                    : "$3 for 1 · $7 for 3 · $10 for 5. No subscription — one credit unlocks one full report. Secure checkout powered by Stripe."}
                 </p>
               </div>
             </div>
             <Button
               size="sm"
               onClick={() => {
-                track(EVENTS.buy_credits_clicked, { source: "post_report_upsell" });
+                track(EVENTS.buy_credits_clicked, {
+                  source: "post_report_upsell",
+                  promo_active: promoActive,
+                  promo_name: promo?.name ?? null,
+                  promo_price: promo ? promo.promo_price_cents / 100 : undefined,
+                  regular_price: promo ? promo.regular_price_cents / 100 : 3,
+                  promo_limit: promo?.limit,
+                  promo_used: promo?.used,
+                  promo_remaining: promoRemaining ?? undefined,
+                });
                 setBuyOpen(true);
               }}
               data-testid="button-upsell-buy"
               className="shrink-0"
             >
               <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-              Buy another report
+              {promoActive ? `Buy another report (${promoPrice})` : "Buy another report"}
             </Button>
           </div>
         </Card>

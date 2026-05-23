@@ -32,6 +32,14 @@ import {
 import type { Analysis, CreditTransaction } from "@shared/schema";
 import { track, EVENTS } from "@/lib/analytics";
 import {
+  formatCents,
+  getLaunchPromoRemaining,
+  LAUNCH_PROMO_TARGET_PACKAGE_ID,
+  type LaunchPromoState,
+  type LaunchPromoCopy,
+} from "@shared/launchPromo";
+import { LaunchPromoCounter } from "@/components/LaunchPromoCounter";
+import {
   clearPendingUnlockAnalysisId,
   getPendingUnlockAnalysisId,
 } from "@/lib/pendingUnlock";
@@ -61,6 +69,8 @@ interface PackagesResponse {
     display_name: string;
     is_preview: boolean;
   };
+  launch_promo?: LaunchPromoState;
+  launch_promo_copy?: LaunchPromoCopy;
 }
 
 interface CheckoutResponse {
@@ -69,6 +79,12 @@ interface CheckoutResponse {
   package: CreditPackage;
   provider: string;
   preview: boolean;
+  /** Effective price (cents) the buyer is being charged for this checkout. */
+  amount_cents?: number;
+  /** True when the launch promo discount was applied to this checkout. */
+  promo_applied?: boolean;
+  /** Promo identifier when promo_applied is true. */
+  promo_name?: string | null;
   /* Preview-only completion payload. Live providers redirect the buyer
    * to a hosted checkout URL and NEVER include verification fields in
    * this response — the field stays null. The Credits page uses this
@@ -89,6 +105,9 @@ interface CompleteResponse {
   pending?: boolean;
   provider?: string;
   package?: CreditPackage;
+  /** Launch promo applied at completion time. */
+  promo_applied?: boolean;
+  promo_name?: string | null;
 }
 
 export default function Credits() {
@@ -211,6 +230,15 @@ export default function Credits() {
   const transactionsQuery = useQuery<{ transactions: CreditTransaction[] }>({
     queryKey: ["/api/credits/transactions"],
   });
+  const launchPromo = packagesQuery.data?.launch_promo;
+  const launchPromoCopy = packagesQuery.data?.launch_promo_copy;
+  const promoActive = !!launchPromo?.active;
+  const promoPriceStr = launchPromo ? formatCents(launchPromo.promo_price_cents) : "$1";
+  const regularPriceStr = launchPromo ? formatCents(launchPromo.regular_price_cents) : "$3";
+  /* Real, server-counted slots remaining. `null` means "we cannot
+   * truthfully say how many are left" — never substitute a fake
+   * number; just don't render the counter. */
+  const promoRemaining = getLaunchPromoRemaining(launchPromo);
 
   /* Provider callback params, captured by the App-level normalizer in
    * App.tsx and stashed for us to read after the route matches. The
@@ -237,7 +265,7 @@ export default function Credits() {
   }, [location]);
 
   const completeCheckout = useMutation({
-    mutationFn: async (input: { session_id: string; token: string }) => {
+    mutationFn: async (input: { session_id: string; token: string; promo?: string }) => {
       const res = await apiRequest("POST", "/api/payments/complete-checkout", input);
       return (await res.json()) as CompleteResponse;
     },
@@ -261,12 +289,30 @@ export default function Credits() {
           already: data.already_processed,
         });
         if (!data.already_processed) {
+          const promoAppliedNow = !!(data as any).promo_applied;
+          const promoNameNow = (data as any).promo_name ?? null;
+          const regularValue = data.package ? data.package.price_cents / 100 : undefined;
+          // When the launch promo is applied, the actual amount charged
+          // is the promo price (not the catalog tile). We report
+          // `value` as the effective charge so Meta / GA / PostHog revenue
+          // reports match the ledger.
+          const effectiveValue =
+            promoAppliedNow && launchPromo
+              ? launchPromo.promo_price_cents / 100
+              : regularValue;
           const purchaseParams = {
             provider: data.provider ?? "preview",
             credits_added: credits,
             package_id: data.package?.id,
-            value: data.package ? data.package.price_cents / 100 : undefined,
+            value: effectiveValue,
+            regular_price: regularValue,
             currency: data.package?.currency ?? "USD",
+            promo_active: promoAppliedNow,
+            promo_name: promoNameNow,
+            promo_price: promoAppliedNow && launchPromo ? launchPromo.promo_price_cents / 100 : undefined,
+            promo_limit: launchPromo?.limit,
+            promo_used: launchPromo?.used,
+            promo_remaining: promoRemaining ?? undefined,
           };
           track(EVENTS.checkout_success, purchaseParams);
           // Alias as `purchase` so platforms expecting that canonical
@@ -358,8 +404,14 @@ export default function Credits() {
   useEffect(() => {
     if (!pendingStripeSession) return;
     const txs = transactionsQuery.data?.transactions ?? [];
-    const ref = `stripe:checkout_session:${pendingStripeSession}`;
-    const match = txs.find((t) => t.reference === ref && t.reason === "purchase");
+    const refPrefix = `stripe:checkout_session:${pendingStripeSession}`;
+    /* The webhook may append a `:promo=<name>` suffix when the
+     * launch-promo discount was applied to this session. Use a prefix
+     * match so the poller resolves the completion regardless of whether
+     * the promo tag is present. */
+    const match = txs.find(
+      (t) => t.reference?.startsWith(refPrefix) && t.reason === "purchase",
+    );
     if (match) {
       setCompletionStatus({ kind: "success", credits: match.amount_delta, already: false });
       const purchaseParams = {
@@ -374,11 +426,28 @@ export default function Credits() {
 
   const checkout = useMutation({
     mutationFn: async (pkg: CreditPackage) => {
+      // Pre-fire with the catalog price; the server response below
+      // tells us whether the launch promo discount was applied, and we
+      // emit a follow-up event once we know the effective price + promo
+      // name. Doing it this way means an ad-blocker that drops the
+      // network call after `checkout_started` still attributes the
+      // funnel step.
+      const promoActiveAtClick =
+        !!launchPromo?.active && pkg.id === LAUNCH_PROMO_TARGET_PACKAGE_ID;
       track(EVENTS.checkout_started, {
         package_id: pkg.id,
         credits: pkg.credits,
-        value: pkg.price_cents / 100,
+        value: promoActiveAtClick && launchPromo
+          ? launchPromo.promo_price_cents / 100
+          : pkg.price_cents / 100,
+        regular_price: pkg.price_cents / 100,
         currency: pkg.currency || "USD",
+        promo_active: promoActiveAtClick,
+        promo_name: promoActiveAtClick ? launchPromo!.name : null,
+        promo_price: promoActiveAtClick ? launchPromo!.promo_price_cents / 100 : undefined,
+        promo_limit: launchPromo?.limit,
+        promo_used: launchPromo?.used,
+        promo_remaining: promoRemaining ?? undefined,
       });
       const res = await apiRequest("POST", "/api/payments/create-checkout", {
         package_id: pkg.id,
@@ -401,7 +470,10 @@ export default function Credits() {
        * redirects back to /#/credits and the App-level URL watcher in
        * App.tsx triggers the same complete-checkout endpoint. */
       if (data.preview && data.preview_completion) {
-        completeCheckout.mutate(data.preview_completion);
+        completeCheckout.mutate({
+          ...data.preview_completion,
+          promo: data.promo_applied && data.promo_name ? data.promo_name : undefined,
+        });
         return;
       }
       window.location.href = data.checkout_url;
@@ -467,8 +539,10 @@ export default function Credits() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Unlock the full AI Exposure Report</h1>
           <p className="text-sm text-muted-foreground">
-            One credit unlocks one full report. The free preview shows your score and a short summary —
-            credits unlock the detailed task breakdown, skills to build, action plan, and PDF export.{" "}
+            One credit unlocks one full report — task-by-task AI exposure, skills that make you
+            harder to replace, AI tools to learn, safer next moves, and a 30/60/90-day action plan.
+            {promoActive ? ` Launch offer: ${promoPriceStr} for your first unlock (regular ${regularPriceStr}).` : ""}
+            {" "}
             {pendingUnlockId
               ? "We'll automatically use one credit on your existing locked report (no rerun)."
               : null}
@@ -575,16 +649,44 @@ export default function Credits() {
         </Alert>
       )}
 
+      {promoActive && (
+        <Alert
+          data-testid="banner-launch-promo"
+          className="border-cyan-400/40 bg-gradient-to-r from-cyan-500/15 via-sky-500/15 to-violet-500/15"
+        >
+          <Sparkles className="w-4 h-4" />
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <AlertTitle>
+                {launchPromoCopy?.headline ??
+                  `Launch offer: First ${launchPromo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPriceStr}. Regular price ${regularPriceStr}.`}
+              </AlertTitle>
+              <AlertDescription>
+                {launchPromoCopy?.includes_line ??
+                  "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
+              </AlertDescription>
+            </div>
+            <LaunchPromoCounter
+              data-testid="text-launch-promo-remaining-credits"
+              className="shrink-0"
+            />
+          </div>
+        </Alert>
+      )}
+
       <Alert
         data-testid="alert-value-compare"
         className="border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-sky-500/10 to-violet-500/10"
       >
         <Sparkles className="w-4 h-4" />
-        <AlertTitle>Why $3?</AlertTitle>
+        <AlertTitle>{promoActive ? `Why ${promoPriceStr} today?` : `Why ${regularPriceStr}?`}</AlertTitle>
         <AlertDescription>
           A personalized career-risk review from a coach or counselor could cost
           $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
-          role-specific AI Exposure Report for just $3.
+          role-specific AI Exposure Report
+          {promoActive
+            ? ` for ${promoPriceStr} today (regular ${regularPriceStr}). Unlock the complete roadmap, not just the score.`
+            : ` for just ${regularPriceStr}. Unlock the complete roadmap, not just the score.`}
         </AlertDescription>
       </Alert>
 
@@ -602,16 +704,29 @@ export default function Credits() {
             </CardContent>
           </Card>
         )}
-        {packages.map((pkg) => (
+        {packages.map((pkg) => {
+          const isPromoPkg =
+            promoActive && pkg.id === LAUNCH_PROMO_TARGET_PACKAGE_ID && !!launchPromo;
+          const effectivePrice = isPromoPkg ? launchPromo!.promo_price_cents : pkg.price_cents;
+          return (
           <Card
             key={pkg.id}
-            className={`relative ${pkg.popular ? "border-primary/60 ring-1 ring-primary/30" : ""}`}
+            className={`relative ${pkg.popular ? "border-primary/60 ring-1 ring-primary/30" : ""} ${isPromoPkg ? "border-cyan-400/60 ring-1 ring-cyan-400/30" : ""}`}
             data-testid={`card-package-${pkg.id}`}
           >
             {pkg.popular && (
               <div className="absolute -top-2 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
                 <Sparkles className="w-2.5 h-2.5" />
                 Popular
+              </div>
+            )}
+            {isPromoPkg && (
+              <div
+                className="absolute -top-2 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 rounded-full bg-cyan-400 text-slate-950 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                data-testid={`badge-launch-promo-${pkg.id}`}
+              >
+                <Sparkles className="w-2.5 h-2.5" />
+                Launch offer
               </div>
             )}
             <CardHeader>
@@ -627,9 +742,31 @@ export default function Credits() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="text-2xl font-semibold tabular-nums">
-                {formatPrice(pkg.price_cents, pkg.currency)}
+              <div className="text-2xl font-semibold tabular-nums flex items-baseline gap-2">
+                <span data-testid={`text-price-${pkg.id}`}>
+                  {formatPrice(effectivePrice, pkg.currency)}
+                </span>
+                {isPromoPkg && (
+                  <span
+                    className="text-sm font-normal text-muted-foreground line-through"
+                    data-testid={`text-regular-price-${pkg.id}`}
+                  >
+                    {formatPrice(pkg.price_cents, pkg.currency)}
+                  </span>
+                )}
               </div>
+              {isPromoPkg && (
+                <div className="text-[11px] text-cyan-200/90 font-medium flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>
+                    {`Launch offer — first ${launchPromo!.limit} customers. Regular ${formatCents(launchPromo!.regular_price_cents)}.`}
+                  </span>
+                  <LaunchPromoCounter
+                    variant="inline"
+                    format="only"
+                    data-testid={`text-launch-promo-remaining-tile-${pkg.id}`}
+                  />
+                </div>
+              )}
               <ul className="space-y-1.5 text-sm">
                 <li className="flex items-start gap-2">
                   <Check className="w-3.5 h-3.5 mt-1 text-primary shrink-0" />
@@ -653,22 +790,31 @@ export default function Credits() {
                     source: "credits_page",
                     package_id: pkg.id,
                     credits: pkg.credits,
+                    promo_active: isPromoPkg,
+                    promo_name: isPromoPkg && launchPromo ? launchPromo.name : null,
+                    promo_price: isPromoPkg && launchPromo ? launchPromo.promo_price_cents / 100 : undefined,
+                    regular_price: pkg.price_cents / 100,
+                    promo_limit: launchPromo?.limit,
+                    promo_used: launchPromo?.used,
+                    promo_remaining: promoRemaining ?? undefined,
                   });
                   checkout.mutate(pkg);
                 }}
                 disabled={checkout.isPending}
-                variant={pkg.popular ? "default" : "outline"}
+                variant={pkg.popular || isPromoPkg ? "default" : "outline"}
                 data-testid={`button-buy-${pkg.id}`}
               >
                 {checkout.isPending ? (
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 ) : null}
-                {providerInfo?.is_preview ? "Buy (preview)" : "Buy"} {pkg.credits} credit
-                {pkg.credits === 1 ? "" : "s"}
+                {isPromoPkg
+                  ? `Unlock My Report for ${formatCents(launchPromo!.promo_price_cents)}`
+                  : `${providerInfo?.is_preview ? "Buy (preview)" : "Buy"} ${pkg.credits} credit${pkg.credits === 1 ? "" : "s"}`}
               </Button>
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       {/* Promo */}

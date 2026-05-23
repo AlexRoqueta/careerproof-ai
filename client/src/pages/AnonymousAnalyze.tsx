@@ -24,6 +24,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { track, EVENTS } from "@/lib/analytics";
 import { writeAnonPreviewToken, type AnonPreviewPayload } from "@/lib/anonPreview";
+import { useLaunchPromo } from "@/hooks/useLaunchPromo";
+import { formatCents } from "@shared/launchPromo";
+import { LaunchPromoCounter } from "@/components/LaunchPromoCounter";
 
 /**
  * AnonymousAnalyze — the new top-of-funnel for unauthenticated visitors.
@@ -43,6 +46,7 @@ import { writeAnonPreviewToken, type AnonPreviewPayload } from "@/lib/anonPrevie
 export default function AnonymousAnalyze() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { active: promoActiveOuter, promo: promoOuter, remaining: promoRemainingOuter } = useLaunchPromo();
 
   const [jobTitle, setJobTitle] = useState("");
   const [jobDescription, setJobDescription] = useState("");
@@ -127,9 +131,28 @@ export default function AnonymousAnalyze() {
 
   const goSignIn = (intent: "save" | "unlock", source: string) => {
     if (preview?.token) writeAnonPreviewToken(preview.token);
-    track(EVENTS.signup_prompt_shown, { source, intent, has_preview: !!preview });
+    const promoProps = {
+      promo_active: promoActiveOuter,
+      promo_name: promoOuter?.name ?? null,
+      promo_price: promoOuter ? promoOuter.promo_price_cents / 100 : undefined,
+      regular_price: promoOuter ? promoOuter.regular_price_cents / 100 : 3,
+      promo_limit: promoOuter?.limit,
+      promo_used: promoOuter?.used,
+      promo_remaining: promoRemainingOuter ?? undefined,
+    };
+    track(EVENTS.signup_prompt_shown, {
+      source,
+      intent,
+      has_preview: !!preview,
+      ...promoProps,
+    });
     if (intent === "unlock") {
-      track(EVENTS.unlock_cta_after_preview, { source });
+      track(EVENTS.unlock_cta_after_preview, { source, ...promoProps });
+      track(EVENTS.unlock_report_clicked, {
+        source: source || "anon_preview",
+        method: "signup",
+        ...promoProps,
+      });
     }
     setLocation("/signin");
     window.scrollTo({ top: 0, behavior: "auto" });
@@ -371,6 +394,9 @@ const AnonymousPreviewView = ({
     score >= 70 ? "from-rose-300 to-red-400" : score >= 40 ? "from-amber-300 to-orange-400" : "from-emerald-300 to-teal-400";
   const label =
     score >= 70 ? "High exposure" : score >= 40 ? "Moderate–High exposure" : "Lower exposure";
+  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
 
   return (
     <div className="min-h-screen bg-background text-foreground antialiased">
@@ -390,10 +416,36 @@ const AnonymousPreviewView = ({
           <AlertDescription>
             This preview is yours — no account needed.{" "}
             <strong>Create a free account</strong> to save it, connect a resume or LinkedIn
-            profile for a more accurate read, or unlock the full AI Exposure Report. Less than
-            a latte — $3 (one credit).
+            profile for a more accurate read, or unlock the complete roadmap.
+            {promoActive
+              ? ` Launch offer: first ${promo?.limit ?? 50} customers unlock the full report for ${promoPrice} (regular ${regularPrice}).`
+              : " Less than a latte — $3 (one credit)."}
           </AlertDescription>
         </Alert>
+        {promoActive && (
+          <Alert
+            data-testid="banner-launch-promo"
+            className="border-cyan-400/40 bg-gradient-to-r from-cyan-500/15 via-sky-500/15 to-violet-500/15"
+          >
+            <Sparkles className="w-4 h-4" />
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <AlertTitle>
+                  {promoCopy?.headline ??
+                    `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`}
+                </AlertTitle>
+                <AlertDescription>
+                  {promoCopy?.includes_line ??
+                    "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
+                </AlertDescription>
+              </div>
+              <LaunchPromoCounter
+                data-testid="text-launch-promo-remaining-anon"
+                className="shrink-0"
+              />
+            </div>
+          </Alert>
+        )}
 
         <Card className="rounded-2xl border-border/60 bg-card/80 backdrop-blur p-5 sm:p-7">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -468,7 +520,9 @@ const AnonymousPreviewView = ({
               className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold"
             >
               <Sparkles className="w-4 h-4 mr-2" />
-              Unlock My Full Report
+              {promoActive
+                ? `Unlock My Report for ${promoPrice}`
+                : `Unlock My Full Report for ${regularPrice}`}
             </Button>
             <Button
               size="lg"
@@ -482,14 +536,20 @@ const AnonymousPreviewView = ({
           </div>
           <p className="mt-3 text-[11px] text-muted-foreground">
             <ShieldCheck className="w-3 h-3 inline mr-1" />
-            Unlock the full report for less than a latte — $3 (one credit). No subscription.
-            Your preview is saved to your account as soon as you sign up — no need to re-enter
-            anything.
+            {promoActive
+              ? `Launch offer: ${promoPrice} today, regular ${regularPrice}. No subscription.`
+              : "Unlock the full report for less than a latte — $3 (one credit). No subscription."}
+            {" "}Your preview is saved to your account as soon as you sign up — no need to
+            re-enter anything.
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground leading-relaxed">
             A personalized career-risk review from a coach or counselor could cost
             $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
-            role-specific AI Exposure Report for just $3.
+            role-specific AI Exposure Report
+            {promoActive
+              ? ` for ${promoPrice} today (regular ${regularPrice}).`
+              : " for just $3."}{" "}
+            Directional career-risk insight, not a guarantee.
           </p>
         </Card>
       </div>

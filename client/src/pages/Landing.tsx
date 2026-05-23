@@ -3,6 +3,9 @@ import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Logo } from "@/components/Logo";
 import { track, EVENTS } from "@/lib/analytics";
+import { useLaunchPromo } from "@/hooks/useLaunchPromo";
+import { formatCents } from "@shared/launchPromo";
+import { LaunchPromoCounter } from "@/components/LaunchPromoCounter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -139,6 +142,9 @@ function NavBar({ onStart }: { onStart: () => void }) {
 /* ---------------- Hero ---------------- */
 
 function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
+  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   return (
     <section className="relative pt-12 sm:pt-20 pb-16 sm:pb-24">
       <div className="mx-auto max-w-6xl px-5 sm:px-8 grid lg:grid-cols-12 gap-10 items-center">
@@ -162,15 +168,35 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
             how exposed your current or prospective role may be to AI disruption — and the skills
             and moves that protect your career.
           </p>
-          <div className="mt-6 inline-flex items-start gap-2.5 rounded-xl border border-cyan-400/30 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-4 py-2.5 max-w-2xl">
+          <div
+            className="mt-6 inline-flex items-start gap-2.5 rounded-xl border border-cyan-400/30 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-4 py-2.5 max-w-2xl"
+            data-testid="banner-launch-promo-hero"
+          >
             <Sparkles className="mt-0.5 h-4 w-4 text-cyan-300 shrink-0" />
-            <p className="text-sm sm:text-[0.95rem] font-medium text-foreground/90 leading-snug">
-              Get your first AI job-risk preview free. Unlock the full report for less than a latte — $3.
-            </p>
+            <div className="flex flex-col gap-1 min-w-0">
+              <p className="text-sm sm:text-[0.95rem] font-medium text-foreground/90 leading-snug">
+                {promoActive
+                  ? (promoCopy?.headline ??
+                      `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`)
+                  : "Get your first AI job-risk preview free. Unlock the full report for less than a latte — $3."}
+              </p>
+              <LaunchPromoCounter
+                data-testid="text-launch-promo-remaining-hero"
+                className="self-start"
+              />
+            </div>
           </div>
           <p className="mt-3 text-xs sm:text-sm text-muted-foreground max-w-2xl leading-relaxed">
+            Unlock the complete roadmap, not just the score — task-by-task AI exposure,
+            skills that make you harder to replace, AI tools to learn, safer next moves,
+            and a 30/60/90-day action plan.
+          </p>
+          <p className="mt-2 text-xs sm:text-sm text-muted-foreground max-w-2xl leading-relaxed">
             A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
-            CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+            CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report
+            {promoActive
+              ? ` for ${promoPrice} today (regular ${regularPrice}).`
+              : " for just $3."}
           </p>
           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <Button
@@ -466,6 +492,9 @@ function Benefits() {
 /* ---------------- Input methods ---------------- */
 
 function InputMethods() {
+  const { active: promoActive, promo } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   const methods = [
     {
       icon: <TypeIcon className="h-5 w-5" />,
@@ -543,11 +572,18 @@ function InputMethods() {
         </div>
         <p className="mt-6 text-xs text-muted-foreground max-w-2xl">
           Either way, your <strong className="text-foreground/80">first AI job-risk preview is free</strong>. The
-          full AI Exposure Report unlocks for $3 (one credit) inside your account.
+          full AI Exposure Report unlocks for{" "}
+          {promoActive
+            ? `${promoPrice} today (launch offer — first ${promo?.limit ?? 50} customers, regular ${regularPrice})`
+            : "$3 (one credit)"}{" "}
+          inside your account.
         </p>
         <p className="mt-3 text-xs text-muted-foreground max-w-2xl leading-relaxed">
           A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
-          CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+          CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report
+          {promoActive
+            ? ` for ${promoPrice} today (regular ${regularPrice}).`
+            : " for just $3."}
         </p>
       </div>
     </section>
@@ -746,6 +782,12 @@ function TrustSafety() {
 /* ---------------- FAQ ---------------- */
 
 function FAQSection() {
+  const { active: promoActive, promo } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
+  const pricingFaqAnswer = promoActive
+    ? `No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. Launch offer: the first ${promo?.limit ?? 50} customers unlock the full AI Exposure Report (detailed task breakdown, skills to build, safer next moves, and a 30/60/90-day action plan) for ${promoPrice} (regular ${regularPrice}) — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.`
+    : "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.";
   const faqs = [
     {
       q: "What exactly does the report tell me?",
@@ -761,7 +803,7 @@ function FAQSection() {
     },
     {
       q: "Do I need to pay to try it?",
-      a: "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.",
+      a: pricingFaqAnswer,
     },
     {
       q: "Do I need an account to start?",
@@ -808,6 +850,9 @@ function FAQSection() {
 /* ---------------- Final CTA ---------------- */
 
 function FinalCTA({ onStart }: { onStart: () => void }) {
+  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
+  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
+  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   return (
     <section className="py-20 sm:py-28 border-t border-border/40">
       <div className="mx-auto max-w-4xl px-5 sm:px-8">
@@ -824,9 +869,20 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
               Get your free AI job-risk preview in under a minute. No account needed to start. No credit card. Your data stays yours.
             </p>
             <p className="mt-4 text-sm sm:text-base text-foreground/85 max-w-2xl mx-auto leading-relaxed">
-              A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
-              CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3.
+              {promoActive
+                ? (promoCopy?.headline ??
+                    `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`)
+                : "A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour. CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3."}
             </p>
+            <p className="mt-2 text-sm sm:text-base text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+              {promoCopy?.includes_line ??
+                "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
+            </p>
+            {promoActive && (
+              <div className="mt-3 flex justify-center">
+                <LaunchPromoCounter data-testid="text-launch-promo-remaining-final-cta" />
+              </div>
+            )}
             <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
               <Button
                 onClick={onStart}
@@ -838,8 +894,12 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
               </Button>
             </div>
             <p className="mt-5 text-xs text-muted-foreground max-w-2xl mx-auto">
-              Free preview, no credit card · Unlock full report from $3 · No subscription ·
-              Secure checkout powered by Stripe · Directional career-risk insight, not a guarantee.
+              Free preview, no credit card ·{" "}
+              {promoActive
+                ? `Launch offer: unlock from ${promoPrice} (regular ${regularPrice})`
+                : "Unlock full report from $3"}
+              {" "}· No subscription · Secure checkout powered by Stripe ·
+              Directional career-risk insight, not a guarantee.
             </p>
           </div>
         </div>

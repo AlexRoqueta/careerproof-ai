@@ -64,6 +64,11 @@ export interface IStorage {
   appendCreditTransaction(tx: InsertCreditTransaction): Promise<CreditTransaction>;
   listCreditTransactions(user_id: number): Promise<CreditTransaction[]>;
   hasUserRedeemedPromo(user_id: number, promo_code_reference: string): Promise<boolean>;
+  /** Count purchase rows whose `reference` includes the given substring.
+   * Used to count launch-promo redemptions across all users — the
+   * promo reference suffix (`:promo=<name>`) is appended at fulfillment
+   * time so a single LIKE query can answer "how many promo unlocks?". */
+  countPurchasesByReferenceSubstring(substring: string): Promise<number>;
   // Resumes
   listResumes(userId: number): Promise<Resume[]>;
   getResume(id: number): Promise<Resume | undefined>;
@@ -303,6 +308,16 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_reason ON credit_transac
       )
       .get(user_id, promo);
     return !!hit;
+  }
+  async countPurchasesByReferenceSubstring(substring: string): Promise<number> {
+    if (!substring) return 0;
+    const row = this.sqlite
+      .prepare(
+        `SELECT COUNT(*) AS n FROM credit_transactions
+          WHERE reason = 'purchase' AND reference LIKE ?`,
+      )
+      .get(`%${substring}%`) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   async listResumes(userId: number): Promise<Resume[]> {
@@ -652,6 +667,15 @@ class PostgresStorage implements IStorage {
       [user_id, promo],
     );
     return r.rowCount! > 0;
+  }
+  async countPurchasesByReferenceSubstring(substring: string): Promise<number> {
+    if (!substring) return 0;
+    const r = await this.pool.query(
+      `SELECT COUNT(*)::int AS n FROM credit_transactions
+        WHERE reason = 'purchase' AND reference LIKE $1`,
+      [`%${substring}%`],
+    );
+    return Number(r.rows[0]?.n ?? 0);
   }
 
   async listResumes(userId: number): Promise<Resume[]> {

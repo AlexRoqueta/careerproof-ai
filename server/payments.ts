@@ -24,6 +24,41 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import Stripe from "stripe";
 import { CREDIT_PACKAGES, findCreditPackage, type CreditPackage } from "@shared/entitlements";
+import {
+  LAUNCH_PROMO_TARGET_PACKAGE_ID,
+  promoReferenceSuffix,
+  type LaunchPromoState,
+} from "@shared/launchPromo";
+import { getLaunchPromoState } from "./launchPromo";
+
+/* Resolve the effective unit price + metadata for a checkout. When the
+ * launch promo is active AND the requested package is the single-credit
+ * starter, the price is replaced with the promo price and the returned
+ * `promo_applied` flag tells the route layer to tag the ledger
+ * reference so subsequent counts and analytics can attribute the sale
+ * to the promo. */
+export interface ResolvedPricing {
+  unit_amount: number;
+  promo_applied: boolean;
+  promo_state: LaunchPromoState;
+}
+
+export async function resolvePricingForPackage(pkg: CreditPackage): Promise<ResolvedPricing> {
+  const promo = await getLaunchPromoState();
+  const isPromoTarget = pkg.id === LAUNCH_PROMO_TARGET_PACKAGE_ID;
+  if (promo.active && isPromoTarget) {
+    return {
+      unit_amount: promo.promo_price_cents,
+      promo_applied: true,
+      promo_state: promo,
+    };
+  }
+  return {
+    unit_amount: pkg.price_cents,
+    promo_applied: false,
+    promo_state: promo,
+  };
+}
 
 /* Common types -------------------------------------------------------- */
 export interface CreateCheckoutInput {
@@ -41,6 +76,12 @@ export interface CreateCheckoutResult {
   checkout_url: string;
   /** Provider session id (for our records); preview-only when in preview mode. */
   session_id: string;
+  /** Effective price (cents) the buyer is being charged for this session. */
+  amount_cents: number;
+  /** True when the launch promo discount was applied to this session. */
+  promo_applied: boolean;
+  /** Promo identifier ("launch50") when promo_applied; null otherwise. */
+  promo_name: string | null;
   /** Identifier of the resolved package (echoed back). */
   package_id: string;
   /** Provider name reported on the ledger row when the purchase completes. */
@@ -87,6 +128,8 @@ export interface WebhookFulfillment {
   amount_cents: number;
   /** Buyer email reported by the provider, if available. */
   customer_email?: string;
+  /** Launch promo identifier when the session metadata flagged it; null otherwise. */
+  promo_name?: string | null;
 }
 
 export interface WebhookParseResult {
@@ -161,23 +204,32 @@ class PreviewPaymentProvider implements PaymentProvider {
   async createCheckout(input: CreateCheckoutInput): Promise<CreateCheckoutResult> {
     const pkg = findCreditPackage(input.package_id);
     if (!pkg) throw new Error(`Unknown package: ${input.package_id}`);
+    const pricing = await resolvePricingForPackage(pkg);
     const session_id = `preview_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
     const token = signPreviewToken({ session_id, package_id: pkg.id });
     /* Build a URL that loops back through the app's success_url with
      * the fields the verify endpoint needs. The frontend success page
      * POSTs to /api/payments/complete-checkout with these fields and
-     * the route handler calls verifySession before granting credits. */
+     * the route handler calls verifySession before granting credits.
+     * The promo flag rides along so the completion path can tag the
+     * ledger reference for downstream counting. */
     const url = new URL(input.success_url);
     url.searchParams.set("status", "preview-success");
     url.searchParams.set("session_id", session_id);
     url.searchParams.set("package_id", pkg.id);
     url.searchParams.set("token", token);
+    if (pricing.promo_applied) {
+      url.searchParams.set("promo", pricing.promo_state.name);
+    }
     return {
       checkout_url: url.toString(),
       session_id,
       package_id: pkg.id,
       provider: this.name,
       preview: true,
+      amount_cents: pricing.unit_amount,
+      promo_applied: pricing.promo_applied,
+      promo_name: pricing.promo_applied ? pricing.promo_state.name : null,
     };
   }
 
@@ -265,6 +317,17 @@ class StripePaymentProvider implements PaymentProvider {
     const pkg = findCreditPackage(input.package_id);
     if (!pkg) throw new Error(`Unknown package: ${input.package_id}`);
 
+    /* Launch promo: the regular catalog price stays as the displayed
+     * tile price, but if the promo is active and the buyer picked the
+     * single-credit ("starter_1") package we charge the discounted
+     * `promo_price_cents` instead. The promo tag is persisted in the
+     * session metadata so the webhook handler can append the
+     * `:promo=<name>` suffix to the ledger reference for later counting
+     * and analytics attribution. */
+    const pricing = await resolvePricingForPackage(pkg);
+    const unitAmount = pricing.unit_amount;
+    const promoName = pricing.promo_applied ? pricing.promo_state.name : null;
+
     /* Inline price_data: the credit catalog (shared/entitlements.ts) is
      * the source of truth for both the in-app price tile and what the
      * buyer is actually charged. Using inline price_data avoids the
@@ -272,6 +335,18 @@ class StripePaymentProvider implements PaymentProvider {
      * records and keeps the ZIP self-contained \u2014 a fresh Stripe
      * account can wire this build without touching the Dashboard
      * (other than the webhook endpoint). */
+    const sessionMetadata: Record<string, string> = {
+      user_id: String(input.user_id),
+      package_id: pkg.id,
+      credits: String(pkg.credits),
+      amount_cents: String(unitAmount),
+    };
+    if (promoName) {
+      sessionMetadata.promo = promoName;
+    }
+    const productName = pricing.promo_applied
+      ? `${pkg.name} \u2014 ${pkg.credits} credit (launch ${pricing.promo_state.name})`
+      : `${pkg.name} \u2014 ${pkg.credits} credit${pkg.credits === 1 ? "" : "s"}`;
     const session = await this.stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -280,13 +355,14 @@ class StripePaymentProvider implements PaymentProvider {
           quantity: 1,
           price_data: {
             currency: pkg.currency.toLowerCase(),
-            unit_amount: pkg.price_cents,
+            unit_amount: unitAmount,
             product_data: {
-              name: `${pkg.name} \u2014 ${pkg.credits} credit${pkg.credits === 1 ? "" : "s"}`,
+              name: productName,
               description: pkg.description,
               metadata: {
                 package_id: pkg.id,
                 credits: String(pkg.credits),
+                ...(promoName ? { promo: promoName } : {}),
               },
             },
           },
@@ -299,12 +375,7 @@ class StripePaymentProvider implements PaymentProvider {
        * PaymentIntent. The webhook handler reads these fields back to
        * resolve the user + package without having to trust anything
        * coming from the buyer's browser. */
-      metadata: {
-        user_id: String(input.user_id),
-        package_id: pkg.id,
-        credits: String(pkg.credits),
-        amount_cents: String(pkg.price_cents),
-      },
+      metadata: sessionMetadata,
       /* Tighten the session lifetime so abandoned sessions don't sit
        * pending forever. 30 minutes is plenty for a checkout flow but
        * limits the ambiguity window if a buyer closes the tab and
@@ -321,6 +392,9 @@ class StripePaymentProvider implements PaymentProvider {
       package_id: pkg.id,
       provider: this.name,
       preview: false,
+      amount_cents: unitAmount,
+      promo_applied: pricing.promo_applied,
+      promo_name: promoName,
     };
   }
 
@@ -414,6 +488,7 @@ class StripePaymentProvider implements PaymentProvider {
     if (!Number.isFinite(user_id) || credits !== pkg.credits) {
       return result;
     }
+    const promoMetadata = typeof metadata.promo === "string" && metadata.promo.length > 0 ? metadata.promo : null;
     result.fulfillment = {
       session_id: session.id,
       package: pkg,
@@ -421,6 +496,7 @@ class StripePaymentProvider implements PaymentProvider {
       credits,
       amount_cents: Number.isFinite(amount_cents) ? amount_cents : pkg.price_cents,
       customer_email: session.customer_details?.email ?? session.customer_email ?? undefined,
+      promo_name: promoMetadata,
     };
     return result;
   }
