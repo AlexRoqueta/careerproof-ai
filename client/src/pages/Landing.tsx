@@ -930,13 +930,36 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
 function Footer() {
   return (
     <footer className="py-10 border-t border-border/40">
-      <div className="mx-auto max-w-6xl px-5 sm:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Logo />
-        </div>
-        <div className="text-xs text-muted-foreground text-center sm:text-right">
-          © {new Date().getFullYear()} CareerProof AI. Career-risk intelligence is directional —
-          not a guarantee. Use it to plan, not to panic.
+      <div className="mx-auto max-w-6xl px-5 sm:px-8 flex flex-col gap-6">
+        <nav
+          aria-label="Learn more"
+          className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-muted-foreground"
+          data-testid="footer-seo-links"
+        >
+          <a href="/ai-job-risk-assessment" className="hover:text-foreground transition">
+            AI job risk assessment
+          </a>
+          <span aria-hidden className="opacity-40">·</span>
+          <a href="/will-ai-replace-my-job" className="hover:text-foreground transition">
+            Will AI replace my job?
+          </a>
+          <span aria-hidden className="opacity-40">·</span>
+          <a href="/jobs-at-risk-from-ai" className="hover:text-foreground transition">
+            Jobs at risk from AI
+          </a>
+          <span aria-hidden className="opacity-40">·</span>
+          <a href="/future-proof-your-career" className="hover:text-foreground transition">
+            Future-proof your career
+          </a>
+        </nav>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Logo />
+          </div>
+          <div className="text-xs text-muted-foreground text-center sm:text-right">
+            © {new Date().getFullYear()} CareerProof AI. Career-risk intelligence is directional —
+            not a guarantee. Use it to plan, not to panic.
+          </div>
         </div>
       </div>
     </footer>

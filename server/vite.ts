@@ -1,10 +1,11 @@
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import { createServer as createViteServer, createLogger } from "vite";
 import type { Server } from 'node:http';
 import viteConfig from "../vite.config";
 import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
+import { SEO_PAGE_ROUTES } from "./seo-pages";
 
 const viteLogger = createLogger();
 
@@ -30,6 +31,23 @@ export async function setupVite(server: Server, app: Express) {
   });
 
   app.use(vite.middlewares);
+
+  // Public SEO routes in dev: serve the static HTML directly from
+  // client/public/seo/ so authors can preview / edit them with vite
+  // running. Production registration lives in server/static.ts.
+  for (const route of SEO_PAGE_ROUTES) {
+    app.get(route.path, (_req: Request, res: Response) => {
+      const filePath = path.resolve(
+        import.meta.dirname,
+        "..",
+        "client",
+        "public",
+        "seo",
+        route.file,
+      );
+      res.sendFile(filePath);
+    });
+  }
 
   app.use("/{*path}", async (req, res, next) => {
     const url = req.originalUrl;

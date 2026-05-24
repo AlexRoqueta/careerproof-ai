@@ -1,13 +1,17 @@
 import { useMe } from "@/hooks/useMe";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { User as UserIcon, Mail, Calendar, CreditCard, ShieldCheck, RefreshCw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { User as UserIcon, Mail, Calendar, CreditCard, ShieldCheck, RefreshCw, Share2, Copy, Check } from "lucide-react";
 import { formatDate } from "@/lib/format";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { User } from "@shared/schema";
 import { hasUnlimitedCredits } from "@shared/entitlements";
+import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { track } from "@/lib/analytics";
 
 export default function Profile() {
   const { data: me, isLoading } = useMe();
@@ -81,6 +85,8 @@ export default function Profile() {
         </CardContent>
       </Card>
 
+      <ReferralCard />
+
       {me.role === "admin" && users && (
         <Card data-testid="card-switch-user">
           <CardHeader>
@@ -117,6 +123,96 @@ export default function Profile() {
         </Card>
       )}
     </div>
+  );
+}
+
+function ReferralCard() {
+  const { toast } = useToast();
+  const [copied, setCopied] = useState(false);
+  const { data, isLoading } = useQuery<{ code: string; created_at: string }>({
+    queryKey: ["/api/referrals/me"],
+    queryFn: async () => {
+      const res = await fetch("/api/referrals/me", { credentials: "include" });
+      if (!res.ok) throw new Error("referral fetch failed");
+      return res.json();
+    },
+  });
+  const code = data?.code ?? "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "https://careerproof.app";
+  const shareUrl = code ? `${origin}/?ref=${code}` : "";
+
+  const copy = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      track("referral_link_copied", { code });
+      setTimeout(() => setCopied(false), 1500);
+      toast({ title: "Link copied", description: "Share it with anyone curious about their AI exposure." });
+    } catch {
+      toast({ title: "Couldn't copy", description: "Long-press the link to copy.", variant: "destructive" });
+    }
+  };
+
+  const share = async () => {
+    if (!shareUrl) return;
+    track("referral_link_shared", { code });
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "CareerProof AI — free AI job-risk preview",
+          text: "Curious how exposed your job is to AI? This took me 2 minutes and the preview is free:",
+          url: shareUrl,
+        });
+        return;
+      } catch {
+        // user dismissed — fall back to copy.
+      }
+    }
+    copy();
+  };
+
+  return (
+    <Card data-testid="card-referral">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Share2 className="w-4 h-4 text-primary" />
+          Share CareerProof AI
+        </CardTitle>
+        <CardDescription>
+          Send a friend the free AI job-risk preview. Your link tracks who you brought in (we don't pay
+          referrals automatically — this is attribution + reporting only).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <Skeleton className="h-9 w-full" />
+        ) : (
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              readOnly
+              value={shareUrl}
+              className="font-mono text-xs sm:text-sm"
+              data-testid="input-referral-url"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={copy} data-testid="button-referral-copy">
+                {copied ? <Check className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button onClick={share} data-testid="button-referral-share">
+                <Share2 className="w-4 h-4 mr-1.5" />
+                Share
+              </Button>
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Suggested message: "Curious how exposed your job is to AI? CareerProof AI gives you a
+          role-specific AI Exposure Report in 2 minutes — the preview is free."
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

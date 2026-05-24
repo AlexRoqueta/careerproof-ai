@@ -192,6 +192,111 @@ export function track(name: string, params: Params = {}): void {
       /* ignore */
     }
   }
+
+  // First-party: fire-and-forget to /api/events so the admin dashboard
+  // has a vendor-independent funnel record. Failures are swallowed —
+  // analytics losses never surface to users.
+  try {
+    void firstPartyEvent(name, params);
+  } catch {
+    /* ignore */
+  }
+}
+
+/* Stable anonymous id stored in localStorage so funnel events can be
+ * threaded together for one browser even before sign-in. */
+const ANON_ID_KEY = "cp.anon_id";
+function getAnonId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    let v = window.localStorage.getItem(ANON_ID_KEY);
+    if (!v) {
+      v = "a_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      window.localStorage.setItem(ANON_ID_KEY, v);
+    }
+    return v;
+  } catch {
+    return "";
+  }
+}
+
+/* Stable A/B variant for the unlock screen, picked once per browser and
+ * persisted in localStorage. The first character of a SHA-ish hash of
+ * the anon id flips A vs B — half-and-half, deterministic per browser. */
+const UNLOCK_VARIANT_KEY = "cp.unlock_variant";
+export function getUnlockVariant(): "A" | "B" {
+  if (typeof window === "undefined") return "A";
+  try {
+    const stored = window.localStorage.getItem(UNLOCK_VARIANT_KEY);
+    if (stored === "A" || stored === "B") return stored;
+    const anon = getAnonId();
+    let hash = 0;
+    for (let i = 0; i < anon.length; i++) hash = (hash * 31 + anon.charCodeAt(i)) | 0;
+    const variant: "A" | "B" = (hash & 1) === 0 ? "A" : "B";
+    window.localStorage.setItem(UNLOCK_VARIANT_KEY, variant);
+    return variant;
+  } catch {
+    return "A";
+  }
+}
+
+/* Referral code helpers — capture `?ref=<code>` once and remember it
+ * for attribution on later signup / purchase events. */
+const REFERRAL_CODE_KEY = "cp.referral_code";
+export function captureReferralFromUrl(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const ref = (params.get("ref") || "").trim().toLowerCase();
+    if (!ref) return;
+    window.localStorage.setItem(REFERRAL_CODE_KEY, ref.slice(0, 64));
+  } catch {
+    /* ignore */
+  }
+}
+export function getStoredReferralCode(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = window.localStorage.getItem(REFERRAL_CODE_KEY);
+    return v && v.length ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+async function firstPartyEvent(name: string, params: Params): Promise<void> {
+  if (typeof window === "undefined") return;
+  // Strip a few props we want as denormalized columns so SQL aggregates
+  // are easy. Anything else lives in the JSON `props` blob.
+  const variant = typeof params.variant === "string" ? (params.variant as string) : undefined;
+  const referral_code =
+    typeof params.referral_code === "string" ? (params.referral_code as string) : undefined;
+  const body = JSON.stringify({
+    name,
+    anon_id: getAnonId(),
+    variant: variant || undefined,
+    referral_code: referral_code || getStoredReferralCode() || undefined,
+    props: params && Object.keys(params).length ? params : undefined,
+  });
+  try {
+    const blob = new Blob([body], { type: "application/json" });
+    if (typeof navigator !== "undefined" && navigator.sendBeacon?.("/api/events", blob)) {
+      return;
+    }
+  } catch {
+    /* sendBeacon may throw on some browsers / CSPs — fall through */
+  }
+  try {
+    await fetch("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      credentials: "include",
+      keepalive: true,
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
 /* Public canonical event names. Use these instead of stringly typed

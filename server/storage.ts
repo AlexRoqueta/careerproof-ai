@@ -28,6 +28,11 @@ import {
   type PasswordReset,
   type CreditTransaction,
   type InsertCreditTransaction,
+  type FunnelEvent,
+  type InsertFunnelEvent,
+  type ReferralCode,
+  type PreviewFollowUp,
+  type InsertPreviewFollowUp,
 } from "@shared/schema";
 import Database from "better-sqlite3";
 import { Pool, type PoolClient } from "pg";
@@ -80,6 +85,37 @@ export interface IStorage {
   createAnalysis(analysis: InsertAnalysis): Promise<Analysis>;
   deleteAnalysis(id: number): Promise<{ changes: number }>;
   unlockAnalysis(id: number): Promise<Analysis | undefined>;
+  // Funnel events
+  appendFunnelEvent(ev: InsertFunnelEvent): Promise<FunnelEvent>;
+  countFunnelEvents(opts: {
+    name?: string;
+    since?: string;
+    until?: string;
+    variant?: string;
+    referral_code?: string;
+  }): Promise<number>;
+  /** Returns rows grouped by event name within an optional date range. */
+  aggregateFunnelEvents(opts: { since?: string; until?: string }): Promise<
+    Array<{ name: string; count: number }>
+  >;
+  /** Returns counts grouped by variant for a single event name. */
+  aggregateFunnelEventsByVariant(opts: {
+    name: string;
+    since?: string;
+    until?: string;
+  }): Promise<Array<{ variant: string | null; count: number }>>;
+  // Referrals
+  getReferralCodeForUser(user_id: number): Promise<ReferralCode | undefined>;
+  getReferralCodeByCode(code: string): Promise<ReferralCode | undefined>;
+  createReferralCode(input: { user_id: number; code: string; created_at: string }): Promise<ReferralCode>;
+  // Preview follow-ups
+  getPreviewFollowUp(user_id: number, kind: string): Promise<PreviewFollowUp | undefined>;
+  createPreviewFollowUp(row: InsertPreviewFollowUp): Promise<PreviewFollowUp>;
+  updatePreviewFollowUp(
+    id: number,
+    patch: Partial<Pick<PreviewFollowUp, "status" | "sent_at" | "reason">>,
+  ): Promise<void>;
+  listPendingPreviewFollowUps(now: string): Promise<PreviewFollowUp[]>;
 }
 
 /* =====================================================================
@@ -152,6 +188,38 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_user ON credit_transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_reason ON credit_transactions(user_id, reason);
+CREATE TABLE IF NOT EXISTS funnel_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  anon_id TEXT,
+  user_id INTEGER,
+  props TEXT,
+  variant TEXT,
+  referral_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_name_time ON funnel_events(name, created_at);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_time ON funnel_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_funnel_events_ref ON funnel_events(referral_code);
+CREATE TABLE IF NOT EXISTS referral_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  code TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_referral_codes_code ON referral_codes(code);
+CREATE TABLE IF NOT EXISTS preview_follow_ups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  analysis_id INTEGER,
+  kind TEXT NOT NULL,
+  scheduled_for TEXT,
+  sent_at TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reason TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_preview_follow_ups_user_kind ON preview_follow_ups(user_id, kind);
+CREATE INDEX IF NOT EXISTS idx_preview_follow_ups_status ON preview_follow_ups(status);
 `);
     // Additive migrations for legacy databases.
     try {
@@ -397,6 +465,144 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_reason ON credit_transac
       .get(id);
     return row ? this.hydrateAnalysis(row) : undefined;
   }
+
+  async appendFunnelEvent(ev: InsertFunnelEvent): Promise<FunnelEvent> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO funnel_events (name, created_at, anon_id, user_id, props, variant, referral_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        ev.name,
+        ev.created_at,
+        ev.anon_id ?? null,
+        ev.user_id ?? null,
+        ev.props ?? null,
+        ev.variant ?? null,
+        ev.referral_code ?? null,
+      ) as FunnelEvent;
+  }
+  async countFunnelEvents(opts: {
+    name?: string;
+    since?: string;
+    until?: string;
+    variant?: string;
+    referral_code?: string;
+  }): Promise<number> {
+    const conds: string[] = [];
+    const params: any[] = [];
+    if (opts.name) { conds.push("name = ?"); params.push(opts.name); }
+    if (opts.since) { conds.push("created_at >= ?"); params.push(opts.since); }
+    if (opts.until) { conds.push("created_at <= ?"); params.push(opts.until); }
+    if (opts.variant) { conds.push("variant = ?"); params.push(opts.variant); }
+    if (opts.referral_code) { conds.push("referral_code = ?"); params.push(opts.referral_code); }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const row = this.sqlite
+      .prepare(`SELECT COUNT(*) AS n FROM funnel_events ${where}`)
+      .get(...params) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+  async aggregateFunnelEvents(opts: { since?: string; until?: string }): Promise<
+    Array<{ name: string; count: number }>
+  > {
+    const conds: string[] = [];
+    const params: any[] = [];
+    if (opts.since) { conds.push("created_at >= ?"); params.push(opts.since); }
+    if (opts.until) { conds.push("created_at <= ?"); params.push(opts.until); }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const rows = this.sqlite
+      .prepare(
+        `SELECT name, COUNT(*) AS count FROM funnel_events ${where}
+         GROUP BY name ORDER BY count DESC`,
+      )
+      .all(...params) as Array<{ name: string; count: number }>;
+    return rows.map((r) => ({ name: r.name, count: Number(r.count) }));
+  }
+  async aggregateFunnelEventsByVariant(opts: { name: string; since?: string; until?: string }) {
+    const conds: string[] = ["name = ?"];
+    const params: any[] = [opts.name];
+    if (opts.since) { conds.push("created_at >= ?"); params.push(opts.since); }
+    if (opts.until) { conds.push("created_at <= ?"); params.push(opts.until); }
+    const rows = this.sqlite
+      .prepare(
+        `SELECT variant, COUNT(*) AS count FROM funnel_events
+          WHERE ${conds.join(" AND ")}
+          GROUP BY variant ORDER BY count DESC`,
+      )
+      .all(...params) as Array<{ variant: string | null; count: number }>;
+    return rows.map((r) => ({ variant: r.variant ?? null, count: Number(r.count) }));
+  }
+
+  async getReferralCodeForUser(user_id: number): Promise<ReferralCode | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM referral_codes WHERE user_id = ?")
+      .get(user_id) as ReferralCode | undefined;
+  }
+  async getReferralCodeByCode(code: string): Promise<ReferralCode | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM referral_codes WHERE code = ?")
+      .get(code) as ReferralCode | undefined;
+  }
+  async createReferralCode(input: {
+    user_id: number;
+    code: string;
+    created_at: string;
+  }): Promise<ReferralCode> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO referral_codes (user_id, code, created_at)
+         VALUES (?, ?, ?) RETURNING *`,
+      )
+      .get(input.user_id, input.code, input.created_at) as ReferralCode;
+  }
+
+  async getPreviewFollowUp(user_id: number, kind: string): Promise<PreviewFollowUp | undefined> {
+    return this.sqlite
+      .prepare("SELECT * FROM preview_follow_ups WHERE user_id = ? AND kind = ?")
+      .get(user_id, kind) as PreviewFollowUp | undefined;
+  }
+  async createPreviewFollowUp(row: InsertPreviewFollowUp): Promise<PreviewFollowUp> {
+    return this.sqlite
+      .prepare(
+        `INSERT INTO preview_follow_ups
+            (user_id, analysis_id, kind, scheduled_for, sent_at, status, reason)
+          VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+      )
+      .get(
+        row.user_id,
+        row.analysis_id ?? null,
+        row.kind,
+        row.scheduled_for ?? null,
+        row.sent_at ?? null,
+        row.status,
+        row.reason ?? null,
+      ) as PreviewFollowUp;
+  }
+  async updatePreviewFollowUp(
+    id: number,
+    patch: Partial<Pick<PreviewFollowUp, "status" | "sent_at" | "reason">>,
+  ): Promise<void> {
+    const fields: string[] = [];
+    const params: any[] = [];
+    if (patch.status !== undefined) { fields.push("status = ?"); params.push(patch.status); }
+    if (patch.sent_at !== undefined) { fields.push("sent_at = ?"); params.push(patch.sent_at); }
+    if (patch.reason !== undefined) { fields.push("reason = ?"); params.push(patch.reason); }
+    if (!fields.length) return;
+    params.push(id);
+    this.sqlite
+      .prepare(`UPDATE preview_follow_ups SET ${fields.join(", ")} WHERE id = ?`)
+      .run(...params);
+  }
+  async listPendingPreviewFollowUps(now: string): Promise<PreviewFollowUp[]> {
+    return this.sqlite
+      .prepare(
+        `SELECT * FROM preview_follow_ups
+          WHERE status = 'pending'
+            AND (scheduled_for IS NULL OR scheduled_for <= ?)
+          ORDER BY id ASC LIMIT 50`,
+      )
+      .all(now) as PreviewFollowUp[];
+  }
 }
 
 /* =====================================================================
@@ -522,6 +728,62 @@ class PostgresStorage implements IStorage {
         `CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_transactions_promo_once
            ON credit_transactions(user_id, reference)
          WHERE reason = 'promo' AND reference IS NOT NULL;`,
+      );
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS funnel_events (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          anon_id TEXT,
+          user_id INTEGER,
+          props TEXT,
+          variant TEXT,
+          referral_code TEXT
+        );
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_funnel_events_name_time
+           ON funnel_events(name, created_at);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_funnel_events_time
+           ON funnel_events(created_at);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_funnel_events_ref
+           ON funnel_events(referral_code);`,
+      );
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS referral_codes (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL UNIQUE,
+          code TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL
+        );
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_referral_codes_code
+           ON referral_codes(code);`,
+      );
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS preview_follow_ups (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          analysis_id INTEGER,
+          kind TEXT NOT NULL,
+          scheduled_for TEXT,
+          sent_at TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          reason TEXT
+        );
+      `);
+      await client.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_preview_follow_ups_user_kind
+           ON preview_follow_ups(user_id, kind);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_preview_follow_ups_status
+           ON preview_follow_ups(status);`,
       );
       await client.query("COMMIT");
       this.migrated = true;
@@ -756,6 +1018,157 @@ class PostgresStorage implements IStorage {
       [id],
     );
     return this.rowToAnalysis(r.rows[0]);
+  }
+
+  async appendFunnelEvent(ev: InsertFunnelEvent): Promise<FunnelEvent> {
+    const r = await this.pool.query(
+      `INSERT INTO funnel_events (name, created_at, anon_id, user_id, props, variant, referral_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        ev.name,
+        ev.created_at,
+        ev.anon_id ?? null,
+        ev.user_id ?? null,
+        ev.props ?? null,
+        ev.variant ?? null,
+        ev.referral_code ?? null,
+      ],
+    );
+    return r.rows[0] as FunnelEvent;
+  }
+  async countFunnelEvents(opts: {
+    name?: string;
+    since?: string;
+    until?: string;
+    variant?: string;
+    referral_code?: string;
+  }): Promise<number> {
+    const conds: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    if (opts.name) { conds.push(`name = $${i++}`); params.push(opts.name); }
+    if (opts.since) { conds.push(`created_at >= $${i++}`); params.push(opts.since); }
+    if (opts.until) { conds.push(`created_at <= $${i++}`); params.push(opts.until); }
+    if (opts.variant) { conds.push(`variant = $${i++}`); params.push(opts.variant); }
+    if (opts.referral_code) { conds.push(`referral_code = $${i++}`); params.push(opts.referral_code); }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const r = await this.pool.query(
+      `SELECT COUNT(*)::int AS n FROM funnel_events ${where}`,
+      params,
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  }
+  async aggregateFunnelEvents(opts: { since?: string; until?: string }): Promise<
+    Array<{ name: string; count: number }>
+  > {
+    const conds: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    if (opts.since) { conds.push(`created_at >= $${i++}`); params.push(opts.since); }
+    if (opts.until) { conds.push(`created_at <= $${i++}`); params.push(opts.until); }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const r = await this.pool.query(
+      `SELECT name, COUNT(*)::int AS count FROM funnel_events ${where}
+        GROUP BY name ORDER BY count DESC`,
+      params,
+    );
+    return r.rows.map((row) => ({ name: row.name as string, count: Number(row.count) }));
+  }
+  async aggregateFunnelEventsByVariant(opts: { name: string; since?: string; until?: string }) {
+    const conds: string[] = ["name = $1"];
+    const params: any[] = [opts.name];
+    let i = 2;
+    if (opts.since) { conds.push(`created_at >= $${i++}`); params.push(opts.since); }
+    if (opts.until) { conds.push(`created_at <= $${i++}`); params.push(opts.until); }
+    const r = await this.pool.query(
+      `SELECT variant, COUNT(*)::int AS count FROM funnel_events
+        WHERE ${conds.join(" AND ")}
+        GROUP BY variant ORDER BY count DESC`,
+      params,
+    );
+    return r.rows.map((row) => ({
+      variant: (row.variant ?? null) as string | null,
+      count: Number(row.count),
+    }));
+  }
+
+  async getReferralCodeForUser(user_id: number): Promise<ReferralCode | undefined> {
+    const r = await this.pool.query(
+      "SELECT * FROM referral_codes WHERE user_id = $1",
+      [user_id],
+    );
+    return r.rows[0] as ReferralCode | undefined;
+  }
+  async getReferralCodeByCode(code: string): Promise<ReferralCode | undefined> {
+    const r = await this.pool.query(
+      "SELECT * FROM referral_codes WHERE code = $1",
+      [code],
+    );
+    return r.rows[0] as ReferralCode | undefined;
+  }
+  async createReferralCode(input: {
+    user_id: number;
+    code: string;
+    created_at: string;
+  }): Promise<ReferralCode> {
+    const r = await this.pool.query(
+      `INSERT INTO referral_codes (user_id, code, created_at)
+        VALUES ($1, $2, $3) RETURNING *`,
+      [input.user_id, input.code, input.created_at],
+    );
+    return r.rows[0] as ReferralCode;
+  }
+
+  async getPreviewFollowUp(user_id: number, kind: string): Promise<PreviewFollowUp | undefined> {
+    const r = await this.pool.query(
+      "SELECT * FROM preview_follow_ups WHERE user_id = $1 AND kind = $2",
+      [user_id, kind],
+    );
+    return r.rows[0] as PreviewFollowUp | undefined;
+  }
+  async createPreviewFollowUp(row: InsertPreviewFollowUp): Promise<PreviewFollowUp> {
+    const r = await this.pool.query(
+      `INSERT INTO preview_follow_ups
+          (user_id, analysis_id, kind, scheduled_for, sent_at, status, reason)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        row.user_id,
+        row.analysis_id ?? null,
+        row.kind,
+        row.scheduled_for ?? null,
+        row.sent_at ?? null,
+        row.status,
+        row.reason ?? null,
+      ],
+    );
+    return r.rows[0] as PreviewFollowUp;
+  }
+  async updatePreviewFollowUp(
+    id: number,
+    patch: Partial<Pick<PreviewFollowUp, "status" | "sent_at" | "reason">>,
+  ): Promise<void> {
+    const fields: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    if (patch.status !== undefined) { fields.push(`status = $${i++}`); params.push(patch.status); }
+    if (patch.sent_at !== undefined) { fields.push(`sent_at = $${i++}`); params.push(patch.sent_at); }
+    if (patch.reason !== undefined) { fields.push(`reason = $${i++}`); params.push(patch.reason); }
+    if (!fields.length) return;
+    params.push(id);
+    await this.pool.query(
+      `UPDATE preview_follow_ups SET ${fields.join(", ")} WHERE id = $${i}`,
+      params,
+    );
+  }
+  async listPendingPreviewFollowUps(now: string): Promise<PreviewFollowUp[]> {
+    const r = await this.pool.query(
+      `SELECT * FROM preview_follow_ups
+        WHERE status = 'pending'
+          AND (scheduled_for IS NULL OR scheduled_for <= $1)
+        ORDER BY id ASC LIMIT 50`,
+      [now],
+    );
+    return r.rows as PreviewFollowUp[];
   }
 }
 

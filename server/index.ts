@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { validateConfigAtStartup } from "./config";
 import { initStorage } from "./storage";
 import { createSessionMiddleware } from "./session";
+import { kickPreviewFollowupProcessor } from "./previewFollowup";
 
 const app = express();
 const httpServer = createServer(app);
@@ -94,6 +95,10 @@ app.use((req, res, next) => {
    * and bootstraps the seeded preview accounts. */
   await initStorage();
   await registerRoutes(httpServer, app);
+  // Kick the delayed preview-follow-up processor. Self-scheduling on
+  // ~10-minute intervals; idempotent across restarts because the
+  // preview_follow_ups table is keyed by (user_id, kind).
+  kickPreviewFollowupProcessor();
 
   /* Any /api/* request that reached here did not match a registered
    * route. Without this guard the SPA catch-all (serveStatic / Vite)

@@ -307,6 +307,92 @@ export type SetPasswordRequest = z.infer<typeof setPasswordRequestSchema>;
  * Codes are 6-digit numeric strings (zero-padded). They expire 30
  * minutes after issue and are single-use.
  * ===================================================================== */
+/* =====================================================================
+ * First-party funnel events
+ *
+ * Lightweight first-party event log so the admin dashboard can show
+ * funnel metrics (preview started → preview viewed → unlock CTA → unlock
+ * purchase, referral attribution, A/B unlock variant performance) even
+ * when GA/Meta aren't available or sampled. Rows are append-only.
+ *
+ * The client POSTs an event to /api/events with {name, props}. The
+ * server fills in the timestamp, anon id (a session-bound stable
+ * identifier kept in localStorage), and user_id (when signed in).
+ *
+ * Storage is intentionally narrow: a single events table indexed by
+ * name + created_at so date-bounded aggregates are cheap. Props is a
+ * JSON-encoded string capped at 4KB so even if the client sends a noisy
+ * payload we don't blow up the table.
+ * ===================================================================== */
+export const funnelEvents = sqliteTable("funnel_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // canonical event name, e.g. "preview_report_viewed".
+  name: text("name").notNull(),
+  // ISO timestamp (UTC). Stored as text to match the rest of the schema.
+  created_at: text("created_at").notNull(),
+  // Stable anonymous id, set in the browser the first time anything
+  // tracks an event. Optional — server-emitted events don't carry one.
+  anon_id: text("anon_id"),
+  // Authenticated user id when the session exists at write time.
+  user_id: integer("user_id"),
+  // Arbitrary JSON-encoded properties. Capped at 4KB by the route.
+  props: text("props"),
+  // Optional unlock A/B variant string, denormalized for cheap filters.
+  variant: text("variant"),
+  // Optional referral code attribution, denormalized for cheap filters.
+  referral_code: text("referral_code"),
+});
+export type FunnelEvent = typeof funnelEvents.$inferSelect;
+export type InsertFunnelEvent = Omit<FunnelEvent, "id">;
+
+export const funnelEventRequestSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  anon_id: z.string().trim().min(1).max(120).optional().or(z.literal("")),
+  variant: z.string().trim().max(40).optional().or(z.literal("")),
+  referral_code: z.string().trim().max(120).optional().or(z.literal("")),
+  props: z.record(z.unknown()).optional(),
+});
+export type FunnelEventRequest = z.infer<typeof funnelEventRequestSchema>;
+
+/* =====================================================================
+ * Referrals
+ *
+ * Each user can mint exactly one referral code. The code is shown in
+ * the app and shareable as `?ref=<code>`. When a visitor arrives with
+ * a `?ref=<code>` query and signs up or purchases, the funnel_events
+ * row for that signup / purchase carries `referral_code` so the admin
+ * dashboard can attribute the conversion. We deliberately do NOT pay
+ * out anything automatically — this is attribution + reporting only.
+ * ===================================================================== */
+export const referralCodes = sqliteTable("referral_codes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id").notNull().unique(),
+  code: text("code").notNull().unique(),
+  created_at: text("created_at").notNull(),
+});
+export type ReferralCode = typeof referralCodes.$inferSelect;
+
+/* =====================================================================
+ * Preview follow-up tracking
+ *
+ * After a signed-in user views their AI preview we may queue a
+ * follow-up email. This table tracks send state so the immediate /
+ * delayed sends are idempotent: a single (user_id, kind) row guards
+ * against accidental double-sends even if the route fires twice.
+ * ===================================================================== */
+export const previewFollowUps = sqliteTable("preview_follow_ups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id").notNull(),
+  analysis_id: integer("analysis_id"),
+  kind: text("kind").notNull(), // 'immediate' | 'delayed_24h'
+  scheduled_for: text("scheduled_for"), // ISO, null for immediate sends
+  sent_at: text("sent_at"), // ISO, null until sent
+  status: text("status").notNull().default("pending"), // 'pending' | 'sent' | 'failed' | 'skipped'
+  reason: text("reason"),
+});
+export type PreviewFollowUp = typeof previewFollowUps.$inferSelect;
+export type InsertPreviewFollowUp = Omit<PreviewFollowUp, "id">;
+
 export const passwordResets = sqliteTable("password_resets", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   user_id: integer("user_id").notNull(),

@@ -77,6 +77,11 @@ export default function Analyze() {
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [linkedinPasted, setLinkedinPasted] = useState("");
   const [linkedinWarning, setLinkedinWarning] = useState<string | null>(null);
+  const [linkedinDiagnostics, setLinkedinDiagnostics] = useState<{
+    confidence: number;
+    confidence_label: "high" | "medium" | "low";
+    warnings: string[];
+  } | null>(null);
   const [linkedinCompany, setLinkedinCompany] = useState("");
   const [linkedinLocation, setLinkedinLocation] = useState("");
   // Single-open accordion. Default to all collapsed so the post-signin
@@ -153,6 +158,7 @@ export default function Analyze() {
     setLinkedinUrl("");
     setLinkedinPasted("");
     setLinkedinWarning(null);
+    setLinkedinDiagnostics(null);
     setLinkedinCompany("");
     setLinkedinLocation("");
     setOpenPanel("");
@@ -188,6 +194,9 @@ export default function Analyze() {
     };
     warning?: string;
     ai_warning?: string;
+    confidence?: number;
+    confidence_label?: "high" | "medium" | "low";
+    warnings?: string[];
   };
 
   const linkedinImportMutation = useMutation({
@@ -204,9 +213,26 @@ export default function Analyze() {
     onSuccess: (data) => {
       track(EVENTS.linkedin_import_completed, { source: data.source, engine: data.engine ?? "n/a" });
       setLinkedinWarning(data.warning ?? null);
+      setLinkedinDiagnostics(
+        data.confidence != null && data.confidence_label
+          ? {
+              confidence: data.confidence,
+              confidence_label: data.confidence_label,
+              warnings: data.warnings ?? [],
+            }
+          : null,
+      );
       const { parsed, source, warning, engine } = data;
+      // Fail-closed rule: when confidence is low, only populate fields
+      // the user can sanity-check (title / company / location). Never
+      // dump a low-confidence description into job_description — that's
+      // the field where login / language / footer / CSS noise tends to
+      // leak through. The user will be prompted to paste the About and
+      // Experience sections (via the warnings block) so a high-
+      // confidence retry can populate the description.
+      const lowConfidence = data.confidence_label === "low";
       if (parsed.job_title) setJobTitle(parsed.job_title);
-      if (parsed.job_description) setJobDescription(parsed.job_description);
+      if (parsed.job_description && !lowConfidence) setJobDescription(parsed.job_description);
       if (parsed.company) setLinkedinCompany(parsed.company);
       if (parsed.location) setLinkedinLocation(parsed.location);
       if (parsed.technology_context && parsed.technology_context.trim()) {
@@ -703,6 +729,45 @@ export default function Analyze() {
                       </AlertTitle>
                       <AlertDescription>{linkedinWarning}</AlertDescription>
                     </Alert>
+                  )}
+                  {linkedinDiagnostics && (
+                    <div
+                      data-testid="panel-linkedin-diagnostics"
+                      className="rounded-md border border-border/60 bg-background/40 p-3 text-xs leading-relaxed space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-medium">Import confidence</span>
+                        <span
+                          data-testid="text-linkedin-confidence"
+                          className={
+                            "rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider " +
+                            (linkedinDiagnostics.confidence_label === "high"
+                              ? "bg-emerald-500/15 text-emerald-300 border border-emerald-400/30"
+                              : linkedinDiagnostics.confidence_label === "medium"
+                              ? "bg-amber-500/15 text-amber-300 border border-amber-400/30"
+                              : "bg-rose-500/15 text-rose-300 border border-rose-400/30")
+                          }
+                        >
+                          {linkedinDiagnostics.confidence_label} ({linkedinDiagnostics.confidence}/100)
+                        </span>
+                      </div>
+                      {linkedinDiagnostics.warnings.length > 0 ? (
+                        <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+                          {linkedinDiagnostics.warnings.map((w, i) => (
+                            <li key={i} data-testid={`linkedin-warning-${i}`}>{w}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-muted-foreground">All four core fields looked clean — review and edit before generating.</p>
+                      )}
+                      {linkedinDiagnostics.confidence_label === "low" && (
+                        <p className="text-muted-foreground italic">
+                          We left the description blank rather than fill it with low-confidence
+                          content. Paste the About and Experience sections from your profile
+                          (signed in) for a richer import.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               </AccordionContent>

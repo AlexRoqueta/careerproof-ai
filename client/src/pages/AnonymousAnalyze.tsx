@@ -22,7 +22,7 @@ import {
 import { Logo } from "@/components/Logo";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { track, EVENTS } from "@/lib/analytics";
+import { track, EVENTS, getUnlockVariant } from "@/lib/analytics";
 import { writeAnonPreviewToken, type AnonPreviewPayload } from "@/lib/anonPreview";
 import { useLaunchPromo } from "@/hooks/useLaunchPromo";
 import { formatCents } from "@shared/launchPromo";
@@ -91,7 +91,11 @@ export default function AnonymousAnalyze() {
         automation_risk: data.automation_risk,
       });
       track(EVENTS.preview_viewed, { anonymous: true, risk_score: data.risk_score });
-      track(EVENTS.preview_report_viewed, { anonymous: true, risk_score: data.risk_score });
+      track(EVENTS.preview_report_viewed, {
+        anonymous: true,
+        risk_score: data.risk_score,
+        variant: getUnlockVariant(),
+      });
       requestAnimationFrame(() => {
         previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
@@ -130,8 +134,10 @@ export default function AnonymousAnalyze() {
   };
 
   const goSignIn = (intent: "save" | "unlock", source: string) => {
+    const variant = getUnlockVariant();
     if (preview?.token) writeAnonPreviewToken(preview.token);
     const promoProps = {
+      variant,
       promo_active: promoActiveOuter,
       promo_name: promoOuter?.name ?? null,
       promo_price: promoOuter ? promoOuter.promo_price_cents / 100 : undefined,
@@ -408,6 +414,27 @@ const AnonymousPreviewView = ({
   const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
   const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
   const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
+  const variant = getUnlockVariant();
+  // A/B copy for the unlock conversion surface.
+  //   A — value comparison: anchor on what a coach review costs ($75–$300+/hr)
+  //       versus the role-specific report price.
+  //   B — action/urgency: emphasize exposed tasks, skills, 30/60/90 plan,
+  //       and the launch promo slot scarcity.
+  const variantCopy = variant === "A"
+    ? {
+        headline_lead: "A career-coach review can run $75–$300+ per hour.",
+        secondary:
+          promoActive
+            ? `CareerProof AI gives you a role-specific AI Exposure Report for ${promoPrice} today (regular ${regularPrice}). Directional career-risk insight, not a guarantee.`
+            : `CareerProof AI gives you a role-specific AI Exposure Report for ${regularPrice}. Directional career-risk insight, not a guarantee.`,
+      }
+    : {
+        headline_lead: "See the exposed tasks, the skills to build, and a 30/60/90-day plan.",
+        secondary:
+          promoActive
+            ? `Launch spots are limited — ${promoPrice} today while they last (regular ${regularPrice}). Use this to plan, not to panic.`
+            : `One credit (${regularPrice}) unlocks the full plan. Use it to plan, not to panic.`,
+      };
 
   return (
     <div className="min-h-screen bg-background text-foreground antialiased">
@@ -569,14 +596,13 @@ const AnonymousPreviewView = ({
             {" "}Your preview is saved to your account as soon as you sign up — no need to
             re-enter anything.
           </p>
-          <p className="mt-2 text-[11px] text-muted-foreground leading-relaxed">
-            A personalized career-risk review from a coach or counselor could cost
-            $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
-            role-specific AI Exposure Report
-            {promoActive
-              ? ` for ${promoPrice} today (regular ${regularPrice}).`
-              : " for just $3."}{" "}
-            Directional career-risk insight, not a guarantee.
+          <p
+            className="mt-2 text-[11px] text-muted-foreground leading-relaxed"
+            data-variant={variant}
+            data-testid={`text-unlock-variant-${variant}`}
+          >
+            <strong className="text-foreground/80">{variantCopy.headline_lead}</strong>{" "}
+            {variantCopy.secondary}
           </p>
         </Card>
       </div>

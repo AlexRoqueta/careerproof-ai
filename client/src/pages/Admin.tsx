@@ -7,12 +7,35 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
-import { ShieldCheck, Save, AlertTriangle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ShieldCheck, Save, AlertTriangle, BarChart3 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { formatDate } from "@/lib/format";
 import { hasUnlimitedCredits } from "@shared/entitlements";
+
+interface AdminMetricsResponse {
+  window: { since: string; until: string };
+  promo: {
+    active: boolean;
+    name: string;
+    limit: number;
+    used: number | null;
+    remaining: number | null;
+    promo_price_cents: number;
+    regular_price_cents: number;
+    reference_suffix: string;
+  } | null;
+  funnel: Array<{ name: string; count: number }>;
+  events_other: Array<{ name: string; count: number }>;
+  ab_unlock_variant: Record<string, Array<{ variant: string | null; count: number }>>;
+  referrals: { signups: number; purchases: number };
+  users: { total: number };
+}
+
+function toIsoDateOnly(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 
 export default function Admin() {
   const { data: me } = useMe();
@@ -65,10 +88,13 @@ export default function Admin() {
           <ShieldCheck className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Admin · Credit manager</h1>
-          <p className="text-sm text-muted-foreground">Adjust credits across user accounts.</p>
+          <h1 className="text-xl font-semibold tracking-tight">Admin · Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Promo redemptions, funnel metrics, and credit administration.</p>
         </div>
       </header>
+
+      <AdminMetricsPanel />
+
 
       <Card>
         <CardHeader>
@@ -169,6 +195,186 @@ export default function Admin() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function AdminMetricsPanel() {
+  const today = useMemo(() => toIsoDateOnly(new Date()), []);
+  const thirtyDaysAgo = useMemo(
+    () => toIsoDateOnly(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
+    [],
+  );
+  const [since, setSince] = useState(thirtyDaysAgo);
+  const [until, setUntil] = useState(today);
+
+  const { data: metrics, isLoading, refetch, isFetching } = useQuery<AdminMetricsResponse>({
+    queryKey: ["/api/admin/metrics", since, until],
+    queryFn: async () => {
+      const url = `/api/admin/metrics?since=${encodeURIComponent(`${since}T00:00:00.000Z`)}&until=${encodeURIComponent(`${until}T23:59:59.999Z`)}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("metrics fetch failed");
+      return res.json();
+    },
+  });
+
+  return (
+    <Card data-testid="card-admin-metrics">
+      <CardHeader>
+        <div className="flex items-start gap-3 justify-between flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-md bg-aurora-light dark:bg-aurora grid place-items-center">
+              <BarChart3 className="w-4 h-4 text-primary" />
+            </div>
+            <div>
+              <CardTitle className="text-base">Funnel & promo metrics</CardTitle>
+              <CardDescription>Date-bounded view of first-party events, promo redemptions, and A/B variant performance.</CardDescription>
+            </div>
+          </div>
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="space-y-1">
+              <Label className="text-xs">Since</Label>
+              <Input
+                type="date"
+                value={since}
+                onChange={(e) => setSince(e.target.value)}
+                className="h-8 w-[140px]"
+                data-testid="input-metrics-since"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Until</Label>
+              <Input
+                type="date"
+                value={until}
+                onChange={(e) => setUntil(e.target.value)}
+                className="h-8 w-[140px]"
+                data-testid="input-metrics-until"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              data-testid="button-metrics-refresh"
+            >
+              {isFetching ? "Loading…" : "Refresh"}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {isLoading && <p className="text-sm text-muted-foreground">Loading metrics…</p>}
+        {metrics && (
+          <>
+            {/* Promo + revenue summary */}
+            {metrics.promo && (
+              <div className="grid sm:grid-cols-3 gap-3" data-testid="panel-promo-summary">
+                <MetricTile
+                  label={`Promo "${metrics.promo.name}"`}
+                  value={metrics.promo.active ? "Active" : "Inactive"}
+                />
+                <MetricTile
+                  label="Promo redemptions"
+                  value={
+                    metrics.promo.used != null
+                      ? `${metrics.promo.used} / ${metrics.promo.limit}`
+                      : `unknown / ${metrics.promo.limit}`
+                  }
+                />
+                <MetricTile
+                  label="Promo slots remaining"
+                  value={metrics.promo.remaining != null ? String(metrics.promo.remaining) : "—"}
+                />
+              </div>
+            )}
+
+            {/* Funnel sequence */}
+            <div>
+              <div className="text-sm font-medium mb-2">Funnel events ({metrics.window.since.slice(0,10)} → {metrics.window.until.slice(0,10)})</div>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <table className="w-full text-sm" data-testid="table-funnel-events">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground">
+                      <th className="px-4 py-2 font-medium">Event</th>
+                      <th className="px-4 py-2 font-medium text-right">Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metrics.funnel.map((row) => (
+                      <tr key={row.name} className="border-t border-border" data-testid={`row-funnel-${row.name}`}>
+                        <td className="px-4 py-2">{row.name}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{row.count.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* A/B unlock variant breakdown */}
+            <div>
+              <div className="text-sm font-medium mb-2">Unlock A/B variant performance</div>
+              <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <table className="w-full text-sm" data-testid="table-ab-variants">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground">
+                      <th className="px-4 py-2 font-medium">Event</th>
+                      <th className="px-4 py-2 font-medium text-right">Variant A</th>
+                      <th className="px-4 py-2 font-medium text-right">Variant B</th>
+                      <th className="px-4 py-2 font-medium text-right">Untagged</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(metrics.ab_unlock_variant).map(([eventName, rows]) => {
+                      const a = rows.find((r) => r.variant === "A")?.count ?? 0;
+                      const b = rows.find((r) => r.variant === "B")?.count ?? 0;
+                      const untagged = rows.find((r) => r.variant === null || r.variant === "")?.count ?? 0;
+                      return (
+                        <tr key={eventName} className="border-t border-border" data-testid={`row-ab-${eventName}`}>
+                          <td className="px-4 py-2">{eventName}</td>
+                          <td className="px-4 py-2 text-right tabular-nums">{a.toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right tabular-nums">{b.toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{untagged.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Referrals */}
+            <div className="grid sm:grid-cols-3 gap-3" data-testid="panel-referrals">
+              <MetricTile label="Referred signups" value={String(metrics.referrals.signups)} />
+              <MetricTile label="Referred purchases" value={String(metrics.referrals.purchases)} />
+              <MetricTile label="Users (total)" value={String(metrics.users.total)} />
+            </div>
+
+            {/* Other events */}
+            {metrics.events_other.length > 0 && (
+              <div>
+                <div className="text-sm font-medium mb-2">Other tracked events</div>
+                <ul className="text-sm text-muted-foreground list-disc pl-5">
+                  {metrics.events_other.map((r) => (
+                    <li key={r.name}><span className="font-medium text-foreground">{r.name}</span> — {r.count.toLocaleString()}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border p-4 bg-muted/30">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
     </div>
   );
 }

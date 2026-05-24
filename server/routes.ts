@@ -58,6 +58,10 @@ import type { Analysis } from "@shared/schema";
 import { rateLimit, keyByIp, keyByEmailAndIp } from "./rate-limit";
 import { getConfigReport } from "./config";
 import { sendPasswordResetEmail, sendAnalysisFeedbackEmail, selectEmailProvider } from "./email";
+import { registerFunnelEventRoute } from "./funnel";
+import { registerAdminMetrics } from "./admin";
+import { registerReferralRoutes } from "./referrals";
+import { queuePreviewFollowups } from "./previewFollowup";
 
 /* Server-side redaction for locked analyses.
  *
@@ -338,6 +342,104 @@ async function getActor(req: Request): Promise<{ id: number; role: string; email
  * The actual checks are inlined at each call site to keep the route
  * handler's intent obvious. `getActor` resolves the current session
  * to a fresh user row so role changes take effect immediately. */
+
+/* Build a confidence score + a structured list of diagnostic warnings
+ * for a LinkedIn import. The UI uses these to render an inline panel —
+ * "LinkedIn login page text detected," "language selector / footer
+ * removed," "CSS artifacts removed," etc. — so the user knows which
+ * fields they should double-check before generating the analysis.
+ *
+ * Confidence is an integer 0–100:
+ *   100 — All four core fields present, no chrome signals.
+ *    -20 — every missing core field (title, company, description, location).
+ *    -25 — login / preview text detected in the paste.
+ *    -15 — language-selector or CSS-artifact lines were stripped.
+ *    -15 — description is the synth-only fallback (no real prose).
+ *
+ * Warnings are short, user-facing, and prescriptive — they tell the
+ * user exactly what to do next ("Paste the About and Experience
+ * sections for best results.").
+ */
+function buildLinkedInDiagnostics(args: {
+  raw: string;
+  result: {
+    job_title: string;
+    company: string;
+    location: string;
+    job_description: string;
+    technology_context?: string;
+  };
+  previewWarning?: string;
+}): {
+  confidence: number;
+  confidence_label: "high" | "medium" | "low";
+  warnings: string[];
+} {
+  const { raw, result, previewWarning } = args;
+  const warnings: string[] = [];
+  let score = 100;
+
+  // Missing-field penalty.
+  const missing: string[] = [];
+  if (!result.job_title) missing.push("current role title");
+  if (!result.company) missing.push("company");
+  if (!result.location) missing.push("location");
+  if (!result.job_description) {
+    missing.push("current role description");
+    warnings.push(
+      "Current role description not found — paste the About and current Experience sections from your LinkedIn profile for a richer import.",
+    );
+  }
+  score -= missing.length * 20;
+
+  // LinkedIn login / preview signals in the raw paste.
+  if (/(by clicking continue to join or sign in|new to linkedin|sign in to view|join now)/i.test(raw)) {
+    warnings.push("LinkedIn login page text detected — please paste from a logged-in tab so we can read the full profile.");
+    score -= 25;
+  }
+
+  // Language selector signal (LinkedIn's footer language picker).
+  if (/(language-selector|data-locale=|english\s*\(united states\)|cestina|čeština|deutsch|español|français|italiano|português|русский)/i.test(raw)) {
+    warnings.push("Language selector / footer text removed from the paste.");
+    score -= 8;
+  }
+
+  // CSS / markup residue signal — pretty common when users copy from a
+  // dev-tools rendered view.
+  if (/(class="[a-z0-9 _-]+"|font-(?:bold|semibold|medium)|leading-(?:tight|snug|relaxed)|data-tracking-control-name)/i.test(raw)) {
+    warnings.push("CSS / markup artifacts removed from the paste.");
+    score -= 8;
+  }
+
+  // Footer / legal residue.
+  if (/(accessibility|cookie policy|your california privacy choices|user agreement|brand policy|guest controls)/i.test(raw)) {
+    warnings.push("Footer / legal text removed from the paste.");
+    score -= 5;
+  }
+
+  // Synth-only description — the cleaner had to assemble a stub from
+  // header fields because the original description failed the gate.
+  if (
+    result.job_description &&
+    /^LinkedIn profile summary \/ current role/i.test(result.job_description) &&
+    result.job_description.length < 400
+  ) {
+    warnings.push(
+      "We only had your role header — paste the About and Experience sections for best results.",
+    );
+    score -= 15;
+  }
+
+  // Add the preview-detection narrative once if we hadn't already.
+  if (previewWarning && !warnings.some((w) => w.toLowerCase().includes("limited linkedin profile content"))) {
+    warnings.push(previewWarning);
+  }
+
+  const confidence = Math.max(0, Math.min(100, score));
+  const confidence_label: "high" | "medium" | "low" =
+    confidence >= 75 ? "high" : confidence >= 45 ? "medium" : "low";
+  return { confidence, confidence_label, warnings };
+}
 
 function extractPdfTextFromDataUrl(dataUrl: string): string | null {
   const match = dataUrl.match(/^data:application\/pdf[^,]*,([a-z0-9+/=]+)$/i);
@@ -906,6 +1008,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : isSynthOnly && descLen < 400
         ? "Limited LinkedIn profile content detected. Paste the About and current Experience sections for a richer import."
         : undefined;
+      const diagnostics = buildLinkedInDiagnostics({
+        raw: pasted,
+        result,
+        previewWarning,
+      });
       return res.json({
         source: "pasted",
         engine: result.source_engine,
@@ -918,6 +1025,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           employment_type: result.employment_type ?? "",
           seniority: result.seniority ?? "",
         },
+        confidence: diagnostics.confidence,
+        confidence_label: diagnostics.confidence_label,
+        warnings: diagnostics.warnings,
         ...(result.ai_error ? { ai_warning: "Used heuristic fallback for paste extraction." } : {}),
         ...(previewWarning ? { warning: previewWarning } : {}),
       });
@@ -1026,6 +1136,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         },
         enriched.source_engine,
       );
+      const fetchDiagnostics = buildLinkedInDiagnostics({
+        raw: buf,
+        result: merged,
+        previewWarning: undefined,
+      });
       return res.json({
         source: "fetch",
         engine: merged.source_engine,
@@ -1038,6 +1153,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           employment_type: merged.employment_type ?? "",
           seniority: merged.seniority ?? "",
         },
+        confidence: fetchDiagnostics.confidence,
+        confidence_label: fetchDiagnostics.confidence_label,
+        warnings: fetchDiagnostics.warnings,
       });
     } catch (err: any) {
       clearTimeout(timer);
@@ -1816,6 +1934,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // is production-safe.
   app.get("/api/config/check", (_req: Request, res: Response) => {
     res.json(getConfigReport());
+  });
+
+  /* --------------- First-party funnel events --------------- */
+  registerFunnelEventRoute(app, getCurrentUserId);
+
+  /* --------------- Admin metrics dashboard --------------- */
+  registerAdminMetrics(app, getCurrentUserId);
+
+  /* --------------- Referral codes --------------- */
+  registerReferralRoutes(app, getCurrentUserId);
+
+  /* --------------- Preview follow-up email --------------- */
+  app.post("/api/preview/followup", async (req: Request, res: Response) => {
+    const meId = getCurrentUserId(req);
+    const me = meId != null ? await storage.getUser(meId) : undefined;
+    // Anonymous viewers do NOT trigger an email — we won't ever guess
+    // an address. Return 204 so the client can fire-and-forget.
+    if (!me) return res.status(204).end();
+    const analysis_id = Number(req.body?.analysis_id);
+    if (!Number.isFinite(analysis_id) || analysis_id <= 0) {
+      return res.status(204).end();
+    }
+    const a = await storage.getAnalysis(analysis_id);
+    if (!a || a.created_by !== me.id) {
+      return res.status(204).end();
+    }
+    const baseUrl =
+      (process.env.APP_BASE_URL ?? "").trim() ||
+      inferBaseUrlFromRequest(req) ||
+      "https://careerproof.app";
+    // Fire-and-forget — never block the response on the email roundtrip.
+    queuePreviewFollowups({
+      user_id: me.id,
+      user_email: me.email,
+      full_name: me.full_name,
+      job_title: a.job_title,
+      risk_score: a.risk_score,
+      automation_risk: a.automation_risk,
+      is_locked: !!a.is_locked,
+      analysis_id: a.id,
+      app_base_url: baseUrl,
+    }).catch((err) => {
+      console.warn("[preview.followup] queue failed:", err);
+    });
+    res.status(202).json({ queued: true });
   });
 
   return httpServer;

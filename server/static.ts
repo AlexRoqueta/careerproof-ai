@@ -2,6 +2,7 @@ import express from 'express';
 import type { Express, Request, Response } from 'express';
 import fs from "node:fs";
 import path from "node:path";
+import { SEO_PAGE_ROUTES } from "./seo-pages";
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
@@ -12,6 +13,16 @@ export function serveStatic(app: Express) {
   }
 
   app.use(express.static(distPath));
+
+  // Public SEO routes — crawler-friendly clean URLs that resolve to
+  // pre-rendered static HTML in dist/public/seo/. The SPA hash-router
+  // owns /#/* paths; these take the bare path (no fragment) so search
+  // engines can index real <title> / <meta> / schema markup.
+  for (const route of SEO_PAGE_ROUTES) {
+    app.get(route.path, (_req: Request, res: Response) => {
+      res.sendFile(path.resolve(distPath, "seo", route.file));
+    });
+  }
 
   // SPA fallback. Only serve index.html for navigation-style requests
   // (no file extension, or explicit .html). Returning index.html for a

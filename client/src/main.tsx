@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { initAnalytics } from "@/lib/analytics";
+import { initAnalytics, captureReferralFromUrl } from "@/lib/analytics";
 
 if (!window.location.hash) {
   window.location.hash = "#/";
@@ -20,5 +20,8 @@ try {
 }
 
 initAnalytics();
+// Capture `?ref=<code>` once per session. The value is persisted in
+// localStorage so later signup / purchase events attribute the visit.
+captureReferralFromUrl();
 
 createRoot(document.getElementById("root")!).render(<App />);

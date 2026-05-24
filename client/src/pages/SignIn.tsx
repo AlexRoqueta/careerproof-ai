@@ -38,6 +38,20 @@ async function claimAnonymousPreviewIfPresent(): Promise<void> {
         analysis_id: analysis.id,
         locked: !!analysis.is_locked,
       });
+      // Fire-and-forget — server side enforces idempotency via the
+      // unique (user_id, kind) constraint on preview_follow_ups, so a
+      // double-fire here is safe.
+      try {
+        void fetch("/api/preview/followup", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ analysis_id: analysis.id }),
+          keepalive: true,
+        });
+      } catch {
+        /* ignore */
+      }
     }
   } catch {
     /* token expired or already claimed — silently ignore */
