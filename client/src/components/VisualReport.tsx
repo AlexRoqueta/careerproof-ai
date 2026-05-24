@@ -24,6 +24,8 @@ import {
   type ReportListItem,
 } from "@/lib/reportSections";
 import { toTitleCase } from "@/lib/format";
+import { useLaunchPromo } from "@/hooks/useLaunchPromo";
+import { formatCents } from "@shared/launchPromo";
 
 /* The visual report renders the parsed report markdown using the same
  * design language as the landing page (cyan/sky accents, dark navy
@@ -129,6 +131,20 @@ function toneGradient(tone: "good" | "warn" | "bad") {
     : "from-rose-300 to-red-400";
 }
 
+/* Map the 0–100 risk score to an emoji + accessible label. Higher
+ * score = higher AI exposure = more concerned face. Bands chosen to
+ * match the existing risk tiers (low / moderate / moderate-high /
+ * high) plus a "very high" step so the visual escalates with the
+ * top-of-scale red. */
+function scoreEmoji(score: number): { emoji: string; label: string } {
+  const s = Math.max(0, Math.min(100, score));
+  if (s < 25) return { emoji: "🙂", label: "Low concern" };
+  if (s < 50) return { emoji: "😐", label: "Mild to moderate concern" };
+  if (s < 70) return { emoji: "😟", label: "Concerned" };
+  if (s < 85) return { emoji: "😰", label: "High concern" };
+  return { emoji: "😱", label: "Very high concern" };
+}
+
 function ReportHero({
   analysis,
   parsed,
@@ -176,6 +192,20 @@ function ReportHero({
                   </span>
                 </div>
                 <div className="pb-2 text-base font-medium text-muted-foreground">/100</div>
+                {(() => {
+                  const e = scoreEmoji(analysis.risk_score);
+                  return (
+                    <div
+                      className="pb-1.5 text-3xl sm:text-4xl leading-none select-none"
+                      role="img"
+                      aria-label={e.label}
+                      title={e.label}
+                      data-testid="score-emoji"
+                    >
+                      {e.emoji}
+                    </div>
+                  );
+                })()}
               </div>
               <div className={`mt-1 text-sm font-medium ${toneTextClass(tier.tone)}`}>
                 {tier.label} · {analysis.automation_risk} automation potential
@@ -771,13 +801,19 @@ function ReportFooterNote() {
 }
 
 function LockedOverlay() {
+  const { active: promoActive, promo } = useLaunchPromo();
+  const price = promoActive && promo
+    ? formatCents(promo.promo_price_cents)
+    : promo
+    ? formatCents(promo.regular_price_cents)
+    : "$3";
   return (
     <div
       className="absolute inset-0 z-10 grid place-items-center rounded-2xl pointer-events-none"
       data-testid="locked-overlay"
     >
       <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-300 backdrop-blur">
-        Free preview — unlock for $3 to read the full AI Exposure Report
+        Free preview — unlock for {price} to read the full AI Exposure Report
       </div>
     </div>
   );

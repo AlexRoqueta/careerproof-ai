@@ -380,6 +380,17 @@ function Header({ right }: { right?: React.ReactNode }) {
   );
 }
 
+/* Map risk score to an emoji + accessible label. Same bands as the
+ * full-report hero so the preview and the unlocked report match. */
+function anonScoreEmoji(score: number): { emoji: string; label: string } {
+  const s = Math.max(0, Math.min(100, score));
+  if (s < 25) return { emoji: "🙂", label: "Low concern" };
+  if (s < 50) return { emoji: "😐", label: "Mild to moderate concern" };
+  if (s < 70) return { emoji: "😟", label: "Concerned" };
+  if (s < 85) return { emoji: "😰", label: "High concern" };
+  return { emoji: "😱", label: "Very high concern" };
+}
+
 const AnonymousPreviewView = ({
   preview,
   onSignIn,
@@ -463,9 +474,25 @@ const AnonymousPreviewView = ({
             <div className="flex items-end justify-between">
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground">Overall risk</div>
-                <div className="mt-1 text-4xl sm:text-5xl font-semibold tracking-tight" data-testid="text-risk-score">
-                  <span className={`bg-gradient-to-r ${tone} bg-clip-text text-transparent`}>{score}</span>
-                  <span className="text-base font-medium text-muted-foreground ml-1">/100</span>
+                <div className="mt-1 flex items-end gap-2">
+                  <div className="text-4xl sm:text-5xl font-semibold tracking-tight" data-testid="text-risk-score">
+                    <span className={`bg-gradient-to-r ${tone} bg-clip-text text-transparent`}>{score}</span>
+                    <span className="text-base font-medium text-muted-foreground ml-1">/100</span>
+                  </div>
+                  {(() => {
+                    const e = anonScoreEmoji(score);
+                    return (
+                      <div
+                        className="pb-1 text-2xl sm:text-3xl leading-none select-none"
+                        role="img"
+                        aria-label={e.label}
+                        title={e.label}
+                        data-testid="score-emoji"
+                      >
+                        {e.emoji}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="mt-1 text-sm font-medium" data-testid="text-risk-label">{label}</div>
               </div>
