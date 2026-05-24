@@ -1,0 +1,25 @@
+# CareerProof AI — robots.txt
+# Allow crawling of all public pages. The app is a single-page application
+# served from `/`; private app routes are gated behind authentication and
+# are not meaningful for indexing.
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /profile
+Disallow: /history
+Disallow: /resumes
+Disallow: /credits
+
+# Allow major AI search and answer crawlers
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
+
+Sitemap: https://careerproof.app/sitemap.xml

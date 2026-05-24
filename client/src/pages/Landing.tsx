@@ -63,15 +63,17 @@ export default function Landing() {
     <div className="min-h-screen bg-background text-foreground antialiased overflow-x-hidden">
       <BackgroundAurora />
       <NavBar onStart={() => goStart("nav")} />
-      <Hero onStart={() => goStart("hero")} onHow={goHow} />
-      <ProblemSection />
-      <HowItWorks />
-      <Benefits />
-      <InputMethods />
-      <SampleReport />
-      <TrustSafety />
-      <FAQSection />
-      <FinalCTA onStart={() => goStart("final_cta")} />
+      <main>
+        <Hero onStart={() => goStart("hero")} onHow={goHow} />
+        <ProblemSection />
+        <HowItWorks />
+        <Benefits />
+        <InputMethods />
+        <SampleReport />
+        <TrustSafety />
+        <FAQSection />
+        <FinalCTA onStart={() => goStart("final_cta")} />
+      </main>
       <Footer />
     </div>
   );
@@ -790,28 +792,40 @@ function FAQSection() {
     : "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.";
   const faqs = [
     {
-      q: "What exactly does the report tell me?",
-      a: "Your overall AI-exposure score, a task-level breakdown of what's most automatable in your role, the skills worth building next, adjacent roles where your experience compounds, and caveats specific to your industry and seniority.",
+      q: "How do I know if AI could affect my job?",
+      a: "Start with a free AI job-risk preview — enter your job title or a short manual description and CareerProof AI returns an overall AI exposure score plus a peek at the most automatable tasks in your role. The full AI Exposure Report goes deeper with a task-by-task breakdown, the skills to build, AI tools to learn, safer adjacent moves, and a 30/60/90-day action plan.",
     },
     {
-      q: "Is this fortune-telling? How accurate is it?",
-      a: "No. It's a structured read of current AI capabilities, labor-market signals, and your role profile. We're explicit that it's a directional signal, not a guarantee — and we surface confidence levels with each score.",
+      q: "What is an AI job risk assessment?",
+      a: "An AI job risk assessment is a structured read of how exposed a specific role is to AI automation. CareerProof AI combines current AI capabilities, labor-market signals, and your role profile to produce a directional exposure score and a task-level breakdown — not a prediction, but a signal you can plan around.",
     },
     {
-      q: "Will my resume or LinkedIn data be used to train AI?",
-      a: "No. We use your inputs to generate your personal report. We don't sell your data and we don't use it to train public models.",
+      q: "What does the CareerProof AI Exposure Report include?",
+      a: "Your overall AI exposure score, a task-by-task breakdown of what's most automatable in your role, the skills worth building next, AI tools to learn, adjacent roles where your experience compounds, a 30/60/90-day action plan, and caveats specific to your industry and seniority.",
+    },
+    {
+      q: "Is the AI Exposure Report a guarantee?",
+      a: "No. It's a structured read of current AI capabilities, labor-market signals, and your role profile. We're explicit that it's directional career-risk intelligence — not a guarantee — and we surface confidence levels alongside each score so you can use it to plan, not to panic.",
+    },
+    {
+      q: "Can I start without creating an account?",
+      a: "Yes. You can start the free preview using a job title or a quick manual description with no account. A free account is only required to upload a resume, import your LinkedIn profile, save your preview, or unlock the full AI Exposure Report.",
+    },
+    {
+      q: "Why unlock the full report?",
+      a: "The free preview shows your overall AI exposure score and a peek at vulnerable tasks. The full AI Exposure Report unlocks the complete roadmap: every task scored, the specific skills and AI tools to learn, safer adjacent roles, and a 30/60/90-day action plan you can start on this week.",
     },
     {
       q: "Do I need to pay to try it?",
       a: pricingFaqAnswer,
     },
     {
-      q: "Do I need an account to start?",
-      a: "No — you can start the free preview using a job title or a quick manual description with no account. A free account is only required to upload a resume, import your LinkedIn profile, save your preview, or unlock the full AI Exposure Report.",
+      q: "Will my resume or LinkedIn data be used to train AI?",
+      a: "No. We use your inputs to generate your personal AI Exposure Report. We don't sell your data and we don't use it to train public models.",
     },
     {
       q: "Can I analyze a role I'm thinking about taking?",
-      a: "Yes. CareerProof works just as well for prospective roles — paste the job title or description and we'll generate the same risk-and-opportunity read.",
+      a: "Yes. CareerProof works just as well for prospective roles — paste the job title or description and we'll generate the same risk-and-opportunity read so you can future-proof your next move.",
     },
     {
       q: "What if my role is already AI-resistant?",
@@ -824,17 +838,20 @@ function FAQSection() {
         <div className="text-center">
           <div className="text-xs uppercase tracking-[0.18em] text-cyan-300/90 font-semibold">FAQ</div>
           <h2 className="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight">
-            Questions, answered.
+            AI job risk, answered.
           </h2>
+          <p className="mt-3 text-muted-foreground max-w-2xl mx-auto">
+            Common questions about AI job risk assessments and what the CareerProof AI Exposure Report includes.
+          </p>
         </div>
         <Accordion type="single" collapsible className="mt-10 w-full">
           {faqs.map((f, i) => (
             <AccordionItem key={i} value={`item-${i}`} className="border-border/50">
               <AccordionTrigger className="text-left text-base font-medium hover:no-underline">
-                <span className="flex items-center gap-2">
+                <h3 className="flex items-center gap-2 text-base font-medium m-0">
                   <ChevronDown className="h-4 w-4 text-cyan-400 transition-transform" />
                   {f.q}
-                </span>
+                </h3>
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground leading-relaxed">
                 {f.a}
