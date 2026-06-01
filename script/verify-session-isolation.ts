@@ -158,8 +158,8 @@ try {
   assert(signupA.status === 200, "client A signup returns 200", signupA);
   assert(signupA.json?.email === emailA, "client A signup returns client A user", signupA.json);
   assert(
-    signupA.json?.credits === 1,
-    "client A signup grants exactly 1 welcome credit",
+    signupA.json?.credits === 0,
+    "client A signup grants 0 credits (no welcome bonus; free-first model)",
     signupA.json,
   );
 
@@ -172,8 +172,8 @@ try {
   assert(signupB.status === 200, "client B signup returns 200", signupB);
   assert(signupB.json?.email === emailB, "client B signup returns client B user", signupB.json);
   assert(
-    signupB.json?.credits === 1,
-    "client B signup grants exactly 1 welcome credit",
+    signupB.json?.credits === 0,
+    "client B signup grants 0 credits (no welcome bonus; free-first model)",
     signupB.json,
   );
 
@@ -193,43 +193,40 @@ try {
     meB1.json,
   );
 
-  /* -------- 2. Welcome-credit ledger row exists for each new user -------- */
+  /* -------- 2. Each new user has an empty, isolated ledger -------- */
+  // Free-first model: signup grants no welcome credit, so a fresh account
+  // starts with an empty ledger. The free first report is an entitlement
+  // claimed at first unlock (reason='free_report_claim'), not a signup grant.
+  const userIdA = meA1.json?.id as number;
+  const userIdB = meB1.json?.id as number;
   const txA = await request(jarA, "GET", "/api/credits/transactions");
   assert(
     Array.isArray(txA.json?.transactions),
     "client A can list their own credit transactions",
     txA.json,
   );
-  const bonusRowA = (txA.json?.transactions ?? []).find(
-    (t: any) => t.reason === "signup_bonus",
-  );
   assert(
-    !!bonusRowA &&
-      bonusRowA.amount_delta === 1 &&
-      bonusRowA.balance_after === 1 &&
-      bonusRowA.reference === "welcome_credit",
-    "client A ledger has a +1 signup_bonus row with reference='welcome_credit'",
-    bonusRowA,
+    (txA.json?.transactions ?? []).every((t: any) => t.reason !== "signup_bonus"),
+    "client A ledger has no signup_bonus row (welcome bonus disabled)",
+    txA.json,
   );
   const txB = await request(jarB, "GET", "/api/credits/transactions");
-  const bonusRowB = (txB.json?.transactions ?? []).find(
-    (t: any) => t.reason === "signup_bonus",
-  );
   assert(
-    !!bonusRowB &&
-      bonusRowB.amount_delta === 1 &&
-      bonusRowB.reference === "welcome_credit",
-    "client B ledger has its own +1 signup_bonus row",
-    bonusRowB,
+    (txB.json?.transactions ?? []).every((t: any) => t.reason !== "signup_bonus"),
+    "client B ledger has no signup_bonus row (welcome bonus disabled)",
+    txB.json,
   );
 
   /* -------- 3. Cross-client read does not leak the other user's ledger -------- */
+  // Force a ledger row onto client B (promo) so the leak check has something
+  // concrete to look for in client A's transactions list.
+  await request(jarB, "POST", "/api/credits/redeem-code", { code: "10FREE" });
   const txBfromAJar = await request(jarA, "GET", "/api/credits/transactions");
-  const sawBemail = (txBfromAJar.json?.transactions ?? []).some(
-    (t: any) => t.user_id === bonusRowB.user_id && t.user_id !== bonusRowA.user_id,
+  const sawBrow = (txBfromAJar.json?.transactions ?? []).some(
+    (t: any) => t.user_id === userIdB && t.user_id !== userIdA,
   );
   assert(
-    !sawBemail,
+    !sawBrow,
     "client A's transactions endpoint never returns client B's ledger rows",
   );
 

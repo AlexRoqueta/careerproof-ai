@@ -42,6 +42,7 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
   const [rating, setRating] = useState<number>(0);
   const [hover, setHover] = useState<number>(0);
   const [comment, setComment] = useState("");
+  const [worthPaying, setWorthPaying] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -59,6 +60,7 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
         setRating(0);
         setHover(0);
         setComment("");
+        setWorthPaying("");
       }, 200);
       return () => clearTimeout(t);
     }
@@ -69,6 +71,7 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
       const res = await apiRequest("POST", "/api/feedback/analysis", {
         rating,
         comment: comment.trim() || undefined,
+        worth_paying_for: worthPaying.trim() || undefined,
         analysis_id: analysisId ?? undefined,
       });
       return (await res.json()) as { ok: boolean; delivered: boolean };
@@ -80,6 +83,14 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
         rating,
         has_comment: comment.trim().length > 0,
       });
+      if (!locked) {
+        track(EVENTS.free_report_feedback_submitted, {
+          analysis_id: analysisId ?? null,
+          rating,
+          has_comment: comment.trim().length > 0,
+          has_worth_paying: worthPaying.trim().length > 0,
+        });
+      }
       toast({
         title: "Thanks for the feedback",
         description: "Your rating helps shape what we build next.",
@@ -172,6 +183,23 @@ export function FeedbackModal({ open, onOpenChange, analysisId, locked }: Props)
               data-testid="input-feedback-comment"
             />
           </div>
+
+          {!locked && (
+            <div className="space-y-1.5">
+              <label htmlFor="feedback-worth-paying" className="text-xs text-muted-foreground">
+                What would make this worth paying for? (optional)
+              </label>
+              <Textarea
+                id="feedback-worth-paying"
+                placeholder="e.g. deeper role-specific guidance, a reskilling plan, ongoing tracking…"
+                value={worthPaying}
+                onChange={(e) => setWorthPaying(e.target.value.slice(0, 2000))}
+                rows={2}
+                className="resize-none"
+                data-testid="input-feedback-worth-paying"
+              />
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-2">

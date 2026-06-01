@@ -21,6 +21,30 @@ export function hasUnlimitedCredits(email?: string | null, role?: string | null)
 }
 
 /* =====================================================================
+ * Free first full report (free-first growth model)
+ *
+ * Every account gets ONE free full report — no credit card, no credit
+ * spend. This is the core of the free-first funnel: cold traffic runs an
+ * anonymous preview, signs up, and unlocks their first full report for
+ * free. The 2nd+ report costs a credit (the credit packs below).
+ *
+ * Enforcement is ledger-based, NOT a column on the user row. The first
+ * free unlock appends a zero-delta credit_transactions row with
+ * reason='free_report_claim' and reference='analysis:<id>'. The presence
+ * of any such row means "this account already used its free report". A
+ * zero-delta row is used (rather than a +1/-1 pair) so the credit balance
+ * is never inflated — the free report is an entitlement, not a credit.
+ *
+ * This avoids a schema migration (reuses credit_transactions) and gives
+ * an immutable audit trail of which analysis the free unlock applied to.
+ *
+ * Unlimited accounts (admins / entitled emails) never consume the free
+ * report — they unlock everything for free and we don't record a row.
+ * ===================================================================== */
+export const FREE_FIRST_REPORT_REASON = "free_report_claim";
+export const FREE_FIRST_REPORT_ENABLED = true;
+
+/* =====================================================================
  * Credit package catalog
  *
  * This is the SINGLE source of truth for credit packages — referenced

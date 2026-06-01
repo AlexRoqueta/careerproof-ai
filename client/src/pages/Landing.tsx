@@ -3,9 +3,6 @@ import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Logo } from "@/components/Logo";
 import { track, EVENTS } from "@/lib/analytics";
-import { useLaunchPromo } from "@/hooks/useLaunchPromo";
-import { formatCents } from "@shared/launchPromo";
-import { LaunchPromoCounter } from "@/components/LaunchPromoCounter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -134,7 +131,7 @@ function NavBar({ onStart }: { onStart: () => void }) {
           className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-lg shadow-sky-500/20"
           data-testid="button-nav-start"
         >
-          Start free preview <ArrowRight className="ml-1 h-4 w-4" />
+          Get my free full report <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </header>
@@ -144,9 +141,6 @@ function NavBar({ onStart }: { onStart: () => void }) {
 /* ---------------- Hero ---------------- */
 
 function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
-  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
-  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
-  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   return (
     <section className="relative pt-12 sm:pt-20 pb-16 sm:pb-24">
       <div className="mx-auto max-w-6xl px-5 sm:px-8 grid lg:grid-cols-12 gap-10 items-center">
@@ -172,33 +166,27 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
           </p>
           <div
             className="mt-6 inline-flex items-start gap-2.5 rounded-xl border border-cyan-400/30 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-4 py-2.5 max-w-2xl"
-            data-testid="banner-launch-promo-hero"
+            data-testid="banner-free-first-hero"
           >
             <Sparkles className="mt-0.5 h-4 w-4 text-cyan-300 shrink-0" />
             <div className="flex flex-col gap-1 min-w-0">
               <p className="text-sm sm:text-[0.95rem] font-medium text-foreground/90 leading-snug">
-                {promoActive
-                  ? (promoCopy?.headline ??
-                      `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`)
-                  : "Get your first AI job-risk preview free. Unlock the full report for less than a latte — $3."}
+                Launch access: Get your full AI Exposure Report free. No credit card required.
               </p>
-              <LaunchPromoCounter
-                data-testid="text-launch-promo-remaining-hero"
-                className="self-start"
-              />
+              <p className="text-xs text-muted-foreground leading-snug">
+                We're offering free full reports while we collect early feedback.
+              </p>
             </div>
           </div>
           <p className="mt-3 text-xs sm:text-sm text-muted-foreground max-w-2xl leading-relaxed">
-            Unlock the complete roadmap, not just the score — task-by-task AI exposure,
+            Your free report is the complete roadmap, not just the score — task-by-task AI exposure,
             skills that make you harder to replace, AI tools to learn, safer next moves,
             and a 30/60/90-day action plan.
           </p>
           <p className="mt-2 text-xs sm:text-sm text-muted-foreground max-w-2xl leading-relaxed">
             A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
-            CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report
-            {promoActive
-              ? ` for ${promoPrice} today (regular ${regularPrice}).`
-              : " for just $3."}
+            CareerProof AI gives you a fast, role-specific AI Exposure Report — your first one free.
+            Need to analyze another role later? Additional reports are $3 each.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <Button
@@ -207,7 +195,7 @@ function Hero({ onStart, onHow }: { onStart: () => void; onHow: () => void }) {
               className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
               data-testid="button-hero-start"
             >
-              Start free preview — no account needed <ArrowRight className="ml-2 h-4 w-4" />
+              Get my free full report <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
             <Button
               onClick={onHow}
@@ -494,9 +482,6 @@ function Benefits() {
 /* ---------------- Input methods ---------------- */
 
 function InputMethods() {
-  const { active: promoActive, promo } = useLaunchPromo();
-  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
-  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   const methods = [
     {
       icon: <TypeIcon className="h-5 w-5" />,
@@ -536,9 +521,10 @@ function InputMethods() {
             Begin in whatever way is fastest for you.
           </h2>
           <p className="mt-4 text-muted-foreground text-base leading-relaxed">
-            Start your <strong className="text-foreground/90">free AI job-risk preview without an account</strong> using a
-            job title or a quick manual description. Want a more accurate read from your real experience? <strong className="text-foreground/90">Create a
-            free account</strong> to upload a resume or import your LinkedIn profile.
+            Start a <strong className="text-foreground/90">free AI job-risk preview without an account</strong> using a
+            job title or a quick manual description, then create a <strong className="text-foreground/90">free account</strong> to
+            unlock your <strong className="text-foreground/90">full report free</strong>. Uploading a resume or importing your
+            LinkedIn profile also requires a free account for a more accurate read.
           </p>
         </div>
         <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -573,19 +559,13 @@ function InputMethods() {
           ))}
         </div>
         <p className="mt-6 text-xs text-muted-foreground max-w-2xl">
-          Either way, your <strong className="text-foreground/80">first AI job-risk preview is free</strong>. The
-          full AI Exposure Report unlocks for{" "}
-          {promoActive
-            ? `${promoPrice} today (launch offer — first ${promo?.limit ?? 50} customers, regular ${regularPrice})`
-            : "$3 (one credit)"}{" "}
-          inside your account.
+          Either way, your <strong className="text-foreground/80">first full AI Exposure Report is free</strong> —
+          no credit card required. Additional reports for other roles are $3 each (multi-packs:
+          $7 for 3, $10 for 5).
         </p>
         <p className="mt-3 text-xs text-muted-foreground max-w-2xl leading-relaxed">
           A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour.
-          CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report
-          {promoActive
-            ? ` for ${promoPrice} today (regular ${regularPrice}).`
-            : " for just $3."}
+          CareerProof AI gives you a fast, role-specific AI Exposure Report — your first one free.
         </p>
       </div>
     </section>
@@ -784,12 +764,8 @@ function TrustSafety() {
 /* ---------------- FAQ ---------------- */
 
 function FAQSection() {
-  const { active: promoActive, promo } = useLaunchPromo();
-  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
-  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
-  const pricingFaqAnswer = promoActive
-    ? `No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. Launch offer: the first ${promo?.limit ?? 50} customers unlock the full AI Exposure Report (detailed task breakdown, skills to build, safer next moves, and a 30/60/90-day action plan) for ${promoPrice} (regular ${regularPrice}) — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.`
-    : "No. Your first AI job-risk preview is free — you'll see your overall AI exposure score, a short summary, and a peek at the most vulnerable tasks. The full report (detailed task breakdown, skills to build, safer next moves, and a 90-day action plan) unlocks for $3 — one credit equals one full report. Multi-packs are $7 for 3 and $10 for 5.";
+  const pricingFaqAnswer =
+    "No — your first full AI Exposure Report is free. Start with a free preview (overall AI exposure score, summary, and a peek at vulnerable tasks), create a free account, and unlock your first full report at no cost — no credit card required. Additional reports for other roles are $3 each (one credit), with multi-packs at $7 for 3 and $10 for 5.";
   const faqs = [
     {
       q: "How do I know if AI could affect my job?",
@@ -809,11 +785,11 @@ function FAQSection() {
     },
     {
       q: "Can I start without creating an account?",
-      a: "Yes. You can start the free preview using a job title or a quick manual description with no account. A free account is only required to upload a resume, import your LinkedIn profile, save your preview, or unlock the full AI Exposure Report.",
+      a: "Yes. You can start the free preview using a job title or a quick manual description with no account. A free account is only required to unlock your first full AI Exposure Report (free), upload a resume, or import your LinkedIn profile.",
     },
     {
-      q: "Why unlock the full report?",
-      a: "The free preview shows your overall AI exposure score and a peek at vulnerable tasks. The full AI Exposure Report unlocks the complete roadmap: every task scored, the specific skills and AI tools to learn, safer adjacent roles, and a 30/60/90-day action plan you can start on this week.",
+      q: "Is the full report really free?",
+      a: "Yes. Every account unlocks its first full AI Exposure Report for free — no credit card. The free report is the complete roadmap: every task scored, the specific skills and AI tools to learn, safer adjacent roles, and a 30/60/90-day action plan. Additional reports for other roles are $3 each.",
     },
     {
       q: "Do I need to pay to try it?",
@@ -867,9 +843,6 @@ function FAQSection() {
 /* ---------------- Final CTA ---------------- */
 
 function FinalCTA({ onStart }: { onStart: () => void }) {
-  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
-  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
-  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   return (
     <section className="py-20 sm:py-28 border-t border-border/40">
       <div className="mx-auto max-w-4xl px-5 sm:px-8">
@@ -883,23 +856,19 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
               <span className="bg-gradient-to-r from-cyan-300 to-sky-300 bg-clip-text text-transparent">before your role changes.</span>
             </h2>
             <p className="mt-4 text-muted-foreground text-base sm:text-lg max-w-2xl mx-auto">
-              Get your free AI job-risk preview in under a minute. No account needed to start. No credit card. Your data stays yours.
+              Get your free full AI Exposure Report in under a minute. No account needed to start the preview. No credit card. Your data stays yours.
             </p>
             <p className="mt-4 text-sm sm:text-base text-foreground/85 max-w-2xl mx-auto leading-relaxed">
-              {promoActive
-                ? (promoCopy?.headline ??
-                    `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`)
-                : "A personalized career-risk review from a coach or counselor could cost $75–$300+ per hour. CareerProof AI gives you a fast, affordable, role-specific AI Exposure Report for just $3."}
+              Launch access: Get your full AI Exposure Report free. We're offering free full reports
+              while we collect early feedback. A personalized career-risk review from a coach or
+              counselor could cost $75–$300+ per hour.
             </p>
             <p className="mt-2 text-sm sm:text-base text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-              {promoCopy?.includes_line ??
-                "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
+              Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan.
             </p>
-            {promoActive && (
-              <div className="mt-3 flex justify-center">
-                <LaunchPromoCounter data-testid="text-launch-promo-remaining-final-cta" />
-              </div>
-            )}
+            <p className="mt-3 text-sm text-cyan-200/90 max-w-2xl mx-auto leading-relaxed">
+              Share with someone worried about AI and work — their first full report is free too.
+            </p>
             <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
               <Button
                 onClick={onStart}
@@ -907,15 +876,12 @@ function FinalCTA({ onStart }: { onStart: () => void }) {
                 className="h-12 px-7 text-base bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold shadow-xl shadow-sky-500/30"
                 data-testid="button-final-start"
               >
-                Start free preview — no account needed <ArrowRight className="ml-2 h-4 w-4" />
+                Get my free full report <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
             <p className="mt-5 text-xs text-muted-foreground max-w-2xl mx-auto">
-              Free preview, no credit card ·{" "}
-              {promoActive
-                ? `Launch offer: unlock from ${promoPrice} (regular ${regularPrice})`
-                : "Unlock full report from $3"}
-              {" "}· No subscription · Secure checkout powered by Stripe ·
+              First full report free, no credit card · Additional reports from $3 ·
+              No subscription · Secure checkout powered by Stripe ·
               Directional career-risk insight, not a guarantee.
             </p>
           </div>

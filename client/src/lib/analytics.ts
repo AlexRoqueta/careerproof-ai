@@ -337,6 +337,15 @@ export const EVENTS = {
   signup_after_preview: "signup_after_preview",
   unlock_cta_after_preview: "unlock_cta_after_preview",
   anonymous_preview_claimed: "anonymous_preview_claimed",
+  // Free-first growth funnel
+  free_full_report_claimed: "free_full_report_claimed",
+  full_report_viewed: "full_report_viewed",
+  free_report_feedback_submitted: "free_report_feedback_submitted",
+  second_report_started: "second_report_started",
+  // Referral / share loop
+  referral_share_clicked: "referral_share_clicked",
+  referral_link_copied: "referral_link_copied",
+  free_report_shared: "free_report_shared",
 } as const;
 
 /* Map our funnel events to Meta standard events where the semantic

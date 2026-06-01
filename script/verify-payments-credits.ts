@@ -180,12 +180,13 @@ try {
     confirm_password: buyerPassword,
   });
   assert(
-    signup.status === 200 && signup.json?.credits === 1,
-    "buyer signs up with 1 welcome credit",
+    signup.status === 200 && signup.json?.credits === 0,
+    "buyer signs up with 0 credits (no welcome bonus; free-first model)",
     signup,
   );
-  // Drain the welcome credit directly so the rest of this script
-  // verifies the from-zero purchase / promo / unlock flows.
+  // Force the balance to 0 regardless of any future welcome-bonus change so
+  // the rest of this script verifies the from-zero purchase / promo / unlock
+  // flows deterministically.
   await storage.setUserCredits(signup.json.id, 0);
 
   const cco = await request("POST", "/api/payments/create-checkout", {
@@ -327,6 +328,20 @@ try {
   // Drain the welcome credit so the analysis is created locked (the
   // assertion that follows requires zero credits at creation time).
   await storage.setUserCredits(lockedSignup.json.id, 0);
+  // Consume the free-first entitlement on a throwaway analysis so the
+  // unlock under test below exercises the PAID (credit-spend) path. Without
+  // this, the first unlock would be claimed for free and never touch credits.
+  const freebie = await request("POST", "/api/analyses", {
+    job_title: "Lighthouse Keeper",
+    job_description:
+      "Maintains the lighthouse and its optics, logs weather, and assists passing vessels.",
+  });
+  const freebieUnlock = await request("POST", `/api/analyses/${freebie.json.id}/unlock`);
+  assert(
+    freebieUnlock.status === 200 && freebieUnlock.json?.is_locked === false,
+    "free-first report is claimed on a throwaway analysis (so the next unlock is paid)",
+    freebieUnlock.json,
+  );
   const analyzed = await request("POST", "/api/analyses", {
     job_title: "Heart Surgeon",
     job_description:

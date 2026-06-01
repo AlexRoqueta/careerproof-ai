@@ -81,9 +81,9 @@ export default function SampleReport() {
             static example data so you can scroll through every section before you sign up.
           </p>
           <p className="mt-3 text-sm text-muted-foreground">
-            Your own free AI job-risk preview runs without an account. A free account is only
-            required to upload a resume, import a LinkedIn profile, save your preview, or unlock
-            the full AI Exposure Report ($3 — one credit).
+            Your own free AI job-risk preview runs without an account. Create a free account and
+            your first full AI Exposure Report is free — no credit card required. Additional reports
+            start at $3.
           </p>
           <p className="mt-3 text-xs text-amber-300/90 inline-flex items-center gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5" />
@@ -102,7 +102,7 @@ export default function SampleReport() {
         <FinalCTA onStart={() => goSignup("final_cta")} />
 
         <div className="text-center text-xs text-muted-foreground">
-          No subscription required · One credit = one full report · Secure checkout powered by Stripe.
+          First full report free, no credit card · Additional reports from $3 · Secure checkout powered by Stripe.
         </div>
       </main>
     </div>

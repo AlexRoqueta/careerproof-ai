@@ -150,7 +150,7 @@ const SEEDED_OWNER_PASSWORD = "Preview2025!";
 const NEW_USER_PASSWORD = "VerifyTest1!";
 
 try {
-  /* -------- 1. Signup with a brand-new email -> welcome credit + drain to zero -------- */
+  /* -------- 1. Signup with a brand-new email -> zero credits -------- */
   const signup = await request("POST", "/api/me/signup", {
     full_name: "Verify Locked",
     email: newEmail,
@@ -159,16 +159,25 @@ try {
   });
   assert(signup.status === 200, "signup new account returns 200", signup);
   assert(
-    signup.json?.credits === 1,
-    "new account starts with 1 welcome credit (signup_bonus)",
+    signup.json?.credits === 0,
+    "new account starts with 0 credits (no welcome bonus; free-first model)",
     signup.json,
   );
   assert(signup.json?.role === "user", "new account role is 'user'");
 
-  // The rest of this script verifies zero-credit behavior: drain the
-  // welcome credit directly via storage so the existing assertions
-  // about locked reports remain meaningful.
+  // Force the balance to 0 regardless of any future welcome-bonus change so
+  // the assertions about zero-credit locked reports remain meaningful.
   await storage.setUserCredits(signup.json.id, 0);
+
+  // Consume the free-first entitlement on a throwaway analysis so the unlock
+  // under test in step 5 exercises the PAID (credit-spend) path rather than
+  // claiming the free report.
+  const freebie = await request("POST", "/api/analyses", {
+    job_title: "Lighthouse Keeper",
+    job_description:
+      "Maintains the lighthouse and its optics, logs weather, and assists passing vessels.",
+  });
+  await request("POST", `/api/analyses/${freebie.json.id}/unlock`);
 
   const me = await request("GET", "/api/me");
   assert(me.json?.email === newEmail, "session points at the new user");

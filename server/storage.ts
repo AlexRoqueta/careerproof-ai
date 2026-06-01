@@ -69,6 +69,13 @@ export interface IStorage {
   appendCreditTransaction(tx: InsertCreditTransaction): Promise<CreditTransaction>;
   listCreditTransactions(user_id: number): Promise<CreditTransaction[]>;
   hasUserRedeemedPromo(user_id: number, promo_code_reference: string): Promise<boolean>;
+  /** True when the user has already consumed their one free full report.
+   * Backed by the presence of a credit_transactions row with
+   * reason='free_report_claim'. See shared/entitlements.ts. */
+  hasUsedFreeReport(user_id: number): Promise<boolean>;
+  /** Count of accounts that have claimed their free first full report.
+   * Used by the admin dashboard's free-first funnel metrics. */
+  countFreeReportClaims(opts?: { since?: string; until?: string }): Promise<number>;
   /** Count purchase rows whose `reference` includes the given substring.
    * Used to count launch-promo redemptions across all users — the
    * promo reference suffix (`:promo=<name>`) is appended at fulfillment
@@ -376,6 +383,26 @@ CREATE INDEX IF NOT EXISTS idx_preview_follow_ups_status ON preview_follow_ups(s
       )
       .get(user_id, promo);
     return !!hit;
+  }
+  async hasUsedFreeReport(user_id: number): Promise<boolean> {
+    const hit = this.sqlite
+      .prepare(
+        `SELECT 1 FROM credit_transactions
+          WHERE user_id = ? AND reason = 'free_report_claim'
+          LIMIT 1`,
+      )
+      .get(user_id);
+    return !!hit;
+  }
+  async countFreeReportClaims(opts?: { since?: string; until?: string }): Promise<number> {
+    const conds: string[] = ["reason = 'free_report_claim'"];
+    const params: any[] = [];
+    if (opts?.since) { conds.push("created_at >= ?"); params.push(opts.since); }
+    if (opts?.until) { conds.push("created_at <= ?"); params.push(opts.until); }
+    const row = this.sqlite
+      .prepare(`SELECT COUNT(*) AS n FROM credit_transactions WHERE ${conds.join(" AND ")}`)
+      .get(...params) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
   }
   async countPurchasesByReferenceSubstring(substring: string): Promise<number> {
     if (!substring) return 0;
@@ -929,6 +956,32 @@ class PostgresStorage implements IStorage {
       [user_id, promo],
     );
     return r.rowCount! > 0;
+  }
+  async hasUsedFreeReport(user_id: number): Promise<boolean> {
+    const r = await this.pool.query(
+      `SELECT 1 FROM credit_transactions
+        WHERE user_id = $1 AND reason = 'free_report_claim'
+        LIMIT 1`,
+      [user_id],
+    );
+    return r.rowCount! > 0;
+  }
+  async countFreeReportClaims(opts?: { since?: string; until?: string }): Promise<number> {
+    const conds: string[] = ["reason = 'free_report_claim'"];
+    const params: any[] = [];
+    if (opts?.since) {
+      params.push(opts.since);
+      conds.push(`created_at >= $${params.length}`);
+    }
+    if (opts?.until) {
+      params.push(opts.until);
+      conds.push(`created_at <= $${params.length}`);
+    }
+    const r = await this.pool.query(
+      `SELECT COUNT(*)::int AS n FROM credit_transactions WHERE ${conds.join(" AND ")}`,
+      params,
+    );
+    return Number(r.rows[0]?.n ?? 0);
   }
   async countPurchasesByReferenceSubstring(substring: string): Promise<number> {
     if (!substring) return 0;

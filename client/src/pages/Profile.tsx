@@ -11,7 +11,7 @@ import type { User } from "@shared/schema";
 import { hasUnlimitedCredits } from "@shared/entitlements";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { track } from "@/lib/analytics";
+import { track, EVENTS } from "@/lib/analytics";
 
 export default function Profile() {
   const { data: me, isLoading } = useMe();
@@ -146,9 +146,9 @@ function ReferralCard() {
     try {
       await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
-      track("referral_link_copied", { code });
+      track(EVENTS.referral_link_copied, { code, source: "profile" });
       setTimeout(() => setCopied(false), 1500);
-      toast({ title: "Link copied", description: "Share it with anyone curious about their AI exposure." });
+      toast({ title: "Link copied", description: "Share it with anyone worried about AI and their job." });
     } catch {
       toast({ title: "Couldn't copy", description: "Long-press the link to copy.", variant: "destructive" });
     }
@@ -156,12 +156,12 @@ function ReferralCard() {
 
   const share = async () => {
     if (!shareUrl) return;
-    track("referral_link_shared", { code });
+    track(EVENTS.referral_share_clicked, { code, source: "profile" });
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "CareerProof AI — free AI job-risk preview",
-          text: "Curious how exposed your job is to AI? This took me 2 minutes and the preview is free:",
+          title: "CareerProof AI — free AI Exposure Report",
+          text: "Know someone worried AI could affect their job? Their first full CareerProof AI report is free:",
           url: shareUrl,
         });
         return;
@@ -180,8 +180,8 @@ function ReferralCard() {
           Share CareerProof AI
         </CardTitle>
         <CardDescription>
-          Send a friend the free AI job-risk preview. Your link tracks who you brought in (we don't pay
-          referrals automatically — this is attribution + reporting only).
+          Know someone worried AI could affect their job? Send them a free CareerProof AI report — their
+          first full report is free too. Your link tracks who you brought in (attribution + reporting only).
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

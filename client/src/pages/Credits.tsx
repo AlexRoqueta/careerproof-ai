@@ -537,14 +537,14 @@ export default function Credits() {
           <CreditCard className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Unlock the full AI Exposure Report</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Analyze another role</h1>
           <p className="text-sm text-muted-foreground">
-            One credit unlocks one full report — task-by-task AI exposure, skills that make you
-            harder to replace, AI tools to learn, safer next moves, and a 30/60/90-day action plan.
-            {promoActive ? ` Launch offer: ${promoPriceStr} for your first unlock (regular ${regularPriceStr}).` : ""}
+            Your first full AI Exposure Report is free. Credits are for analyzing additional roles —
+            one credit unlocks one full report (task-by-task AI exposure, skills to build, AI tools
+            to learn, safer next moves, and a 30/60/90-day action plan).
             {" "}
             {pendingUnlockId
-              ? "We'll automatically use one credit on your existing locked report (no rerun)."
+              ? "We'll automatically unlock your existing locked report (no rerun)."
               : null}
             {" "}
             {unlimitedCredits
@@ -980,6 +980,13 @@ function describeTransaction(tx: CreditTransaction): { title: string; subtitle?:
       return {
         title: "Report unlock",
         subtitle: m ? `Analysis #${m[1]}` : "Unlocked a locked report",
+      };
+    }
+    case "free_report_claim": {
+      const m = tx.reference?.match(/analysis:(\d+)/);
+      return {
+        title: "Free first report unlocked",
+        subtitle: m ? `Analysis #${m[1]}` : "Your free full report",
       };
     }
     case "admin_adjustment":

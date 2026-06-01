@@ -198,6 +198,8 @@ export interface AnalysisFeedbackEmailInput {
   to: string;
   rating: number; // 1-5
   comment?: string;
+  /** Free-first survey answer: "what would make this worth paying for?" */
+  worth_paying_for?: string;
   user_id?: number | null;
   user_email?: string | null;
   job_title?: string | null;
@@ -231,6 +233,11 @@ function buildFeedbackEmailBody(input: AnalysisFeedbackEmailInput): {
     "",
     "Comment:",
     input.comment && input.comment.trim().length > 0 ? input.comment.trim() : "(no comment)",
+    "",
+    "What would make this worth paying for:",
+    input.worth_paying_for && input.worth_paying_for.trim().length > 0
+      ? input.worth_paying_for.trim()
+      : "(no answer)",
   ].filter(Boolean) as string[];
   const text = lines.join("\n");
 
@@ -242,6 +249,12 @@ function buildFeedbackEmailBody(input: AnalysisFeedbackEmailInput): {
           input.comment.trim(),
         )}</pre>`
       : `<p style="margin:0;color:#94a3b8;font-style:italic">(no comment)</p>`;
+  const worthPayingHtml =
+    input.worth_paying_for && input.worth_paying_for.trim().length > 0
+      ? `<pre style="margin:0;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;color:#0f172a">${escape(
+          input.worth_paying_for.trim(),
+        )}</pre>`
+      : `<p style="margin:0;color:#94a3b8;font-style:italic">(no answer)</p>`;
 
   const rows: { label: string; value: string }[] = [
     { label: "Rating", value: `${clamped}/5 (${stars})` },
@@ -276,6 +289,10 @@ function buildFeedbackEmailBody(input: AnalysisFeedbackEmailInput): {
     <div style="border-top:1px solid #e2e8f0;padding-top:12px">
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;font-weight:600;margin-bottom:6px">Comment</div>
       ${commentHtml}
+    </div>
+    <div style="border-top:1px solid #e2e8f0;padding-top:12px;margin-top:12px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;font-weight:600;margin-bottom:6px">What would make this worth paying for</div>
+      ${worthPayingHtml}
     </div>
   </div>
 </body></html>`;

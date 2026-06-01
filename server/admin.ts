@@ -79,6 +79,19 @@ export function registerAdminMetrics(
      * total counts here; per-code breakdown is below if the admin runs
      * a query manually. */
 
+    /* Free-first funnel: how many free first reports were claimed in the
+     * window, and how those users convert toward paid interest. Claims are
+     * ledger-backed (reason='free_report_claim') so this is authoritative
+     * regardless of whether the client fired the funnel event. */
+    const freeReportsClaimed = await storage
+      .countFreeReportClaims({ since, until })
+      .catch(() => 0);
+    const buyCreditsClicked = eventsByName["buy_credits_clicked"] ?? 0;
+    const secondReportStarted = eventsByName["second_report_started"] ?? 0;
+    const purchases = eventsByName["purchase"] ?? 0;
+    const rate = (num: number, denom: number) =>
+      denom > 0 ? Math.round((num / denom) * 1000) / 10 : null;
+
     /* User / analysis totals — cheap. */
     const allUsers = await storage.listUsers().catch(() => []);
     const totalUsers = allUsers.length;
@@ -105,6 +118,19 @@ export function registerAdminMetrics(
       referrals: {
         signups: referralSignups,
         purchases: referralPurchases,
+      },
+      free_first: {
+        reports_claimed: freeReportsClaimed,
+        buy_credits_clicked: buyCreditsClicked,
+        second_report_started: secondReportStarted,
+        purchases,
+        /* Of users who claimed a free report, share that went on to show
+         * paid intent (clicked buy credits or started a second report). */
+        paid_interest_rate_pct: rate(
+          Math.max(buyCreditsClicked, secondReportStarted),
+          freeReportsClaimed,
+        ),
+        purchase_rate_pct: rate(purchases, freeReportsClaimed),
       },
       users: { total: totalUsers },
     });

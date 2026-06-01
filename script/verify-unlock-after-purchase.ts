@@ -152,8 +152,22 @@ try {
   });
   assert(signup.status === 200, "signup returns 200", signup);
   await storage.setUserCredits(signup.json.id, 0);
+  // Consume the free-first entitlement on a throwaway analysis so the
+  // locked-report flow below tests the PAID unlock path. Without this the
+  // first unlock would be claimed for free and never hit the credit gate.
+  const freebie = await request("POST", "/api/analyses", {
+    job_title: "Lighthouse Keeper",
+    job_description:
+      "Maintains the lighthouse and its optics, logs weather, and assists passing vessels.",
+  });
+  await request("POST", `/api/analyses/${freebie.json.id}/unlock`);
   const me0 = await request("GET", "/api/me");
   assert(me0.json?.credits === 0, "user starts the locked-flow test at 0 credits");
+  assert(
+    me0.json?.free_report_used === true,
+    "free-first entitlement is consumed before the paid-unlock test",
+    me0.json,
+  );
 
   /* 2. POST /api/analyses with 0 credits -> locked record --------------- */
   const analyze = await request("POST", "/api/analyses", {

@@ -76,8 +76,8 @@ function buildImmediateEmail(args: {
   const subject = `Your AI Exposure Report for ${args.job_title} is ready`;
   const ctaUrl = `${args.app_base_url.replace(/\/+$/, "")}/#/analyze`;
   const lockedNote = args.is_locked
-    ? `Your free preview is unlocked. The full report — with task-by-task breakdown, AI tools to learn, and a 30/60/90-day plan — unlocks for one credit (currently $1 during the launch promo).`
-    : `Your full AI Exposure Report is unlocked. You can re-open or print it from your account at any time.`;
+    ? `Your first full AI Exposure Report is free — no credit card needed. Open it to unlock the task-by-task breakdown, the AI tools to learn, and your 30/60/90-day plan.`
+    : `Your full AI Exposure Report is unlocked. You can re-open, print, or share it from your account at any time.`;
   const text = [
     `Hi ${args.full_name.split(/\s+/)[0] || "there"},`,
     "",
@@ -93,6 +93,12 @@ function buildImmediateEmail(args: {
     "2. Pick one skill from the report and start a small project this month.",
     "3. Calendar the 30/60/90-day plan even loosely so the next move is easy.",
     "",
+    "Two quick favors that genuinely help us:",
+    "- Hit reply and tell us what was useful (or what was missing). We read every message.",
+    "- Know someone else worried AI could affect their job? Forward them the link — their first full report is free too.",
+    "",
+    "Want to analyze another role later? You can add reports from $3 — but your first one is on us.",
+    "",
     "Career-risk intelligence is directional — not a guarantee. Use it to plan, not to panic.",
     "",
     "— CareerProof AI",
@@ -105,13 +111,21 @@ function buildImmediateEmail(args: {
       <p style="margin:0 0 12px;color:#334155">Hi ${escapeHtml(args.full_name.split(/\s+/)[0] || "there")} — your report for <strong>${escapeHtml(args.job_title)}</strong> is ready.</p>
       <p style="margin:0 0 8px;color:#334155">Overall AI exposure: <strong>${escapeHtml(args.automation_risk)}</strong> (score ${args.risk_score}/100).</p>
       <p style="margin:14px 0;color:#475569">${escapeHtml(lockedNote)}</p>
-      <p style="margin:18px 0"><a href="${ctaUrl}" style="display:inline-block;padding:11px 18px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open my report</a></p>
+      <p style="margin:18px 0"><a href="${ctaUrl}" style="display:inline-block;padding:11px 18px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open my free report</a></p>
       <h2 style="font-size:14px;margin:18px 0 8px;color:#0f172a">In the next 7 days</h2>
       <ol style="padding-left:20px;color:#334155;margin:0 0 14px">
         <li>Pick the most exposed task from your report and delegate it to an AI tool.</li>
         <li>Pick one skill and start a small project this month.</li>
         <li>Calendar the 30/60/90-day plan so the next move is easy.</li>
       </ol>
+      <div style="border-top:1px solid #e2e8f0;margin-top:16px;padding-top:14px">
+        <p style="margin:0 0 6px;color:#334155;font-size:14px"><strong>Two quick favors that genuinely help us:</strong></p>
+        <ul style="padding-left:20px;color:#475569;margin:0 0 8px;font-size:14px">
+          <li>Hit reply and tell us what was useful — or what was missing. We read every message.</li>
+          <li>Know someone else worried AI could affect their job? Forward them the link — their first full report is free too.</li>
+        </ul>
+        <p style="margin:8px 0 0;color:#64748b;font-size:13px">Want to analyze another role later? You can add reports from $3 — but your first one is on us.</p>
+      </div>
       <p style="margin:24px 0 0;font-size:12px;color:#94a3b8">Career-risk intelligence is directional — not a guarantee. Use it to plan, not to panic.</p>
       <p style="margin:8px 0 0;font-size:12px;color:#94a3b8">You're receiving this because you ran a preview on CareerProof AI. Reply to stop these messages.</p>
     </div>
@@ -132,7 +146,8 @@ function buildDelayedEmail(args: { full_name: string; job_title: string; app_bas
     "",
     `Open your report: ${ctaUrl}`,
     "",
-    "If unlocking the full report is on your list, the launch promo ($1 instead of $3) is still available while spots remain.",
+    "If you haven't opened your full report yet, it's still free — no credit card needed.",
+    "And if it helped, forwarding the link to someone else worried about AI and work means a lot (their first full report is free too).",
     "",
     "— CareerProof AI",
     "",
@@ -147,7 +162,7 @@ function buildDelayedEmail(args: { full_name: string; job_title: string; app_bas
         <li>Pick one skill the report flagged and block 30 minutes tomorrow to start.</li>
       </ol>
       <p style="margin:18px 0"><a href="${ctaUrl}" style="display:inline-block;padding:11px 18px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Open my report</a></p>
-      <p style="margin:14px 0;color:#475569;font-size:14px">If unlocking the full report is on your list, the launch promo ($1 instead of $3) is still available while spots remain.</p>
+      <p style="margin:14px 0;color:#475569;font-size:14px">If you haven't opened your full report yet, it's still free — no credit card needed. And if it helped, forwarding the link to someone else worried about AI and work means a lot — their first full report is free too.</p>
       <p style="margin:8px 0 0;font-size:12px;color:#94a3b8">Reply to stop these messages.</p>
     </div>
   </body></html>`;

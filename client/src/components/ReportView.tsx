@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Download, Share2, Lock, Sparkles, Loader2, AlertTriangle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Download, Share2, Lock, Sparkles, Loader2, AlertTriangle, Copy, Check, Users } from "lucide-react";
 import type { Analysis } from "@shared/schema";
 import { formatDateTime, toTitleCase } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
@@ -8,7 +9,7 @@ import { useEffect, useState } from "react";
 import { ShareModal } from "./ShareModal";
 import { BuyCreditsModal } from "./BuyCreditsModal";
 import { FeedbackModal } from "./FeedbackModal";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMe } from "@/hooks/useMe";
 import { hasUnlimitedCredits } from "@shared/entitlements";
@@ -64,7 +65,12 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { data: me } = useMe();
   const unlimited = hasUnlimitedCredits(me?.email, me?.role);
-  const canSpend = unlimited || (me?.credits ?? 0) > 0;
+  // Free-first: every non-unlimited account unlocks ONE full report for
+  // free. `free_report_used` comes from /api/me (ledger-backed). When the
+  // free unlock is still available, the locked screen offers it at no cost
+  // and no credit is spent; once used, we fall back to credit/paid copy.
+  const freeAvailable = !unlimited && !me?.free_report_used;
+  const canSpend = unlimited || freeAvailable || (me?.credits ?? 0) > 0;
   const preview = analysis.preview;
   const { active: promoActive, promo, copy: promoCopy, remaining: promoRemaining } = useLaunchPromo();
   const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
@@ -113,6 +119,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
       };
       track(EVENTS.preview_viewed, previewParams);
       track(EVENTS.preview_report_viewed, previewParams);
+    } else {
+      track(EVENTS.full_report_viewed, {
+        analysis_id: analysis.id,
+        risk_score: analysis.risk_score,
+      });
     }
   }, [analysis.id, isLocked, analysis.risk_score]);
 
@@ -201,11 +212,25 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
               </div>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1.5 leading-relaxed">
                 You're seeing your AI exposure score, a short summary, and the
-                tasks most likely to be exposed. Unlock the complete roadmap, not
-                just the score — and we'll bring you straight back to this exact
-                report. No rerun, no re-entry.
+                tasks most likely to be exposed.{" "}
+                {freeAvailable
+                  ? "Your first full report is free — unlock the complete roadmap at no cost, no credit card. We'll bring you straight back to this exact report. No rerun, no re-entry."
+                  : "Unlock the complete roadmap, not just the score — and we'll bring you straight back to this exact report. No rerun, no re-entry."}
               </p>
-              {promoActive && (
+              {freeAvailable && (
+                <div
+                  className="mt-3 rounded-lg border border-emerald-400/40 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-sky-500/10 px-3 py-2 text-xs leading-relaxed text-foreground/90"
+                  data-testid="banner-free-first-unlock"
+                >
+                  <p className="font-semibold text-foreground">
+                    Launch access: Get your full AI Exposure Report free.
+                  </p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    No credit card required. We're offering free full reports while we collect early feedback.
+                  </p>
+                </div>
+              )}
+              {!freeAvailable && promoActive && (
                 <div
                   className="mt-3 rounded-lg border border-cyan-400/40 bg-gradient-to-r from-cyan-500/10 via-sky-500/10 to-violet-500/10 px-3 py-2 text-xs leading-relaxed text-foreground/90"
                   data-testid="banner-launch-promo"
@@ -252,17 +277,20 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   </li>
                 </ul>
                 <p className="mt-3 text-[11px] text-cyan-200/90 font-medium">
-                  {promoActive
-                    ? `Launch offer — ${promoPrice} today, regular ${regularPrice}.`
-                    : `Unlock the full report for less than a latte — ${regularPrice}.`}
+                  {freeAvailable
+                    ? "Your first full report is free — no credit card required."
+                    : promoActive
+                      ? `Launch offer — ${promoPrice} today, regular ${regularPrice}.`
+                      : `Unlock the full report for less than a latte — ${regularPrice}.`}
                 </p>
                 <p className="mt-1.5 text-[11px] text-muted-foreground leading-relaxed">
                   A personalized career-risk review from a coach or counselor could cost
-                  $75–$300+ per hour. CareerProof AI gives you a fast, affordable,
-                  role-specific AI Exposure Report
-                  {promoActive
-                    ? ` for ${promoPrice} today (regular ${regularPrice}).`
-                    : ` for just ${regularPrice}.`}
+                  $75–$300+ per hour. CareerProof AI gives you a fast, role-specific AI Exposure Report
+                  {freeAvailable
+                    ? " — your first one free."
+                    : promoActive
+                      ? ` for ${promoPrice} today (regular ${regularPrice}).`
+                      : ` for just ${regularPrice}.`}
                 </p>
               </div>
 
@@ -319,7 +347,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                       const props = {
                         source: "preview_banner",
                         analysis_id: analysis.id,
-                        method: unlimited ? "entitlement" : "credit",
+                        method: unlimited
+                          ? "entitlement"
+                          : freeAvailable
+                            ? "free_first"
+                            : "credit",
                         promo_active: promoActive,
                         promo_name: promo?.name ?? null,
                         promo_price: promo ? promo.promo_price_cents / 100 : undefined,
@@ -330,6 +362,12 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                       };
                       track(EVENTS.unlock_cta_clicked, props);
                       track(EVENTS.unlock_report_clicked, props);
+                      if (freeAvailable) {
+                        track(EVENTS.free_full_report_claimed, {
+                          analysis_id: analysis.id,
+                          source: "preview_banner",
+                        });
+                      }
                       unlockMutation.mutate();
                     }}
                     disabled={unlockMutation.isPending}
@@ -340,7 +378,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                     ) : (
                       <Sparkles className="w-3.5 h-3.5 mr-1.5" />
                     )}
-                    {unlimited ? "Unlock My Full Report" : "Unlock My Full Report (1 credit)"}
+                    {freeAvailable
+                      ? "Unlock My Full Report — Free"
+                      : unlimited
+                        ? "Unlock My Full Report"
+                        : "Unlock My Full Report (1 credit)"}
                   </Button>
                 ) : (
                   <Button
@@ -379,9 +421,11 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
                   </Button>
                 )}
                 <span className="self-center text-[11px] text-muted-foreground">
-                  {promoActive
-                    ? `${promoPrice} today · regular ${regularPrice}`
-                    : `Less than a latte — ${regularPrice} · One credit = one full report`}
+                  {freeAvailable
+                    ? "Free · no credit card · additional reports from $3"
+                    : promoActive
+                      ? `${promoPrice} today · regular ${regularPrice}`
+                      : `Less than a latte — ${regularPrice} · One credit = one full report`}
                 </span>
               </div>
             </div>
@@ -435,6 +479,10 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
         </Card>
       )}
 
+      {!isLocked && (
+        <ShareReferralCard analysisId={analysis.id} onOpenShare={() => setShareOpen(true)} />
+      )}
+
       <ShareModal
         open={shareOpen}
         onOpenChange={setShareOpen}
@@ -452,5 +500,101 @@ export function ReportView({ analysis, onAnalysisUpdated }: Props) {
         locked={isLocked}
       />
     </div>
+  );
+}
+
+/* Post-report share + referral loop. Shown after a full (unlocked)
+ * report. Leads with the viral ask and, when the user is signed in,
+ * uses their personal referral link so shares are attributed. */
+function ShareReferralCard({
+  analysisId,
+  onOpenShare,
+}: {
+  analysisId: number;
+  onOpenShare: () => void;
+}) {
+  const { toast } = useToast();
+  const [copied, setCopied] = useState(false);
+  const { data } = useQuery<{ code: string }>({
+    queryKey: ["/api/referrals/me"],
+    queryFn: async () => {
+      const res = await fetch("/api/referrals/me", { credentials: "include" });
+      if (!res.ok) throw new Error("referral fetch failed");
+      return res.json();
+    },
+  });
+  const code = data?.code ?? "";
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "https://careerproof.app";
+  const shareUrl = code ? `${origin}/?ref=${code}` : `${origin}/`;
+  const shareText =
+    "Know someone worried AI could affect their job? Send them a free CareerProof AI report — their first full report is free:";
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      track(EVENTS.referral_link_copied, { code, source: "report", analysis_id: analysisId });
+      track(EVENTS.free_report_shared, { method: "copy", source: "report", analysis_id: analysisId });
+      toast({ title: "Link copied", description: "Share it with someone worried about AI and work." });
+    } catch {
+      toast({ title: "Couldn't copy", description: "Long-press the link to copy.", variant: "destructive" });
+    }
+  };
+
+  const nativeShare = async () => {
+    track(EVENTS.referral_share_clicked, { code, source: "report", analysis_id: analysisId });
+    if (typeof navigator !== "undefined" && (navigator as any).share) {
+      try {
+        await (navigator as any).share({
+          title: "CareerProof AI — free AI Exposure Report",
+          text: shareText,
+          url: shareUrl,
+        });
+        track(EVENTS.free_report_shared, { method: "native", source: "report", analysis_id: analysisId });
+        return;
+      } catch {
+        /* user cancelled — fall back to the share modal */
+      }
+    }
+    onOpenShare();
+  };
+
+  return (
+    <Card
+      className="border-cyan-400/30 bg-gradient-to-br from-violet-500/10 via-cyan-500/10 to-sky-500/10 p-4 sm:p-5 rounded-2xl"
+      data-testid="card-share-referral"
+    >
+      <div className="flex items-start gap-3">
+        <Users className="w-5 h-5 text-cyan-300 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">
+            Know someone worried AI could affect their job?
+          </p>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1 leading-relaxed">
+            Send them a free CareerProof AI report — their first full report is free too.
+          </p>
+          <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            <Input
+              readOnly
+              value={shareUrl}
+              className="font-mono text-xs sm:text-sm"
+              data-testid="input-report-referral-url"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={copyLink} data-testid="button-report-referral-copy">
+                {copied ? <Check className="w-4 h-4 mr-1.5" /> : <Copy className="w-4 h-4 mr-1.5" />}
+                {copied ? "Copied" : "Copy link"}
+              </Button>
+              <Button size="sm" onClick={nativeShare} data-testid="button-report-referral-share">
+                <Share2 className="w-4 h-4 mr-1.5" />
+                Share
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }

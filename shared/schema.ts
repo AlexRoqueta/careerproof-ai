@@ -200,6 +200,10 @@ export const redeemPromoCodeSchema = z.object({
 export const analysisFeedbackSchema = z.object({
   rating: z.number().int().min(1).max(5),
   comment: z.string().trim().max(2000).optional().or(z.literal("")),
+  /* Free-first feedback loop: optional answer to "what would make this
+   * worth paying for?". Captured on the full-report feedback prompt so
+   * we learn what converts a free reader into a paying one. */
+  worth_paying_for: z.string().trim().max(2000).optional().or(z.literal("")),
   analysis_id: z.number().int().optional().nullable(),
 });
 export type AnalysisFeedbackRequest = z.infer<typeof analysisFeedbackSchema>;
@@ -226,7 +230,7 @@ export const creditTransactions = sqliteTable("credit_transactions", {
   user_id: integer("user_id").notNull(),
   amount_delta: integer("amount_delta").notNull(),
   balance_after: integer("balance_after").notNull(),
-  reason: text("reason").notNull(), // 'purchase' | 'promo' | 'unlock_spend' | 'admin_adjustment' | 'signup_bonus'
+  reason: text("reason").notNull(), // 'purchase' | 'promo' | 'unlock_spend' | 'admin_adjustment' | 'signup_bonus' | 'free_report_claim'
   reference: text("reference"), // package id, promo code, analysis id, etc.
   provider: text("provider"), // 'preview' | 'stripe' | 'lemonsqueezy' | null
   created_at: text("created_at").notNull(),
@@ -240,6 +244,12 @@ export const CREDIT_TX_REASONS = [
   "unlock_spend",
   "admin_adjustment",
   "signup_bonus",
+  // Free first full report. Recorded as a zero-delta ledger row (it does
+  // not touch the credit balance) the first time a user unlocks a report
+  // without spending a credit. Its presence is the durable "this account
+  // has used its free first report" entitlement marker — see
+  // shared/entitlements.ts:FREE_FIRST_REPORT_REASON.
+  "free_report_claim",
 ] as const;
 export type CreditTxReason = (typeof CREDIT_TX_REASONS)[number];
 

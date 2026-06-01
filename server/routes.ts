@@ -39,6 +39,8 @@ import {
   hasUnlimitedCredits,
   CREDIT_PACKAGES,
   findCreditPackage,
+  FREE_FIRST_REPORT_ENABLED,
+  FREE_FIRST_REPORT_REASON,
 } from "@shared/entitlements";
 import { paymentProvider } from "./payments";
 import { getLaunchPromoState } from "./launchPromo";
@@ -58,7 +60,7 @@ import type { Analysis } from "@shared/schema";
 import { rateLimit, keyByIp, keyByEmailAndIp } from "./rate-limit";
 import { getConfigReport } from "./config";
 import { sendPasswordResetEmail, sendAnalysisFeedbackEmail, selectEmailProvider } from "./email";
-import { registerFunnelEventRoute } from "./funnel";
+import { registerFunnelEventRoute, logServerEvent } from "./funnel";
 import { registerAdminMetrics } from "./admin";
 import { registerReferralRoutes } from "./referrals";
 import { queuePreviewFollowups } from "./previewFollowup";
@@ -542,7 +544,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await setCurrentUserId(req, null);
       return res.status(401).json({ error: "Not signed in" });
     }
-    res.json(sanitizeUserForResponse(user));
+    // Surface the free-first entitlement state so the client can render
+    // the right locked-screen copy/CTA (free first unlock vs. paid).
+    // Unlimited accounts never consume a free report, so they're never
+    // "used up". Otherwise the ledger is the source of truth.
+    const unlimited = hasUnlimitedCredits(user.email, user.role);
+    const free_report_used =
+      FREE_FIRST_REPORT_ENABLED && !unlimited
+        ? await storage.hasUsedFreeReport(user.id)
+        : false;
+    res.json({ ...sanitizeUserForResponse(user), free_report_used });
   });
 
   // Generic credentials-error message used for unknown-email AND
@@ -1326,6 +1337,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     if (!analysis.is_locked) return res.json(analysis); // already unlocked, no-op
     const unlimited = hasUnlimitedCredits(me.email, me.role);
+
+    // Free-first entitlement: every non-unlimited account unlocks ONE full
+    // report for free, no credit spend. Enforced via the ledger \u2014 if the
+    // user has no prior 'free_report_claim' row, this unlock claims it.
+    // Recorded as a zero-delta row so the credit balance is never inflated;
+    // the presence of the row is the "free report used" flag. This runs
+    // BEFORE the credit gate so a user with zero credits can still claim it.
+    if (FREE_FIRST_REPORT_ENABLED && !unlimited && !(await storage.hasUsedFreeReport(me.id))) {
+      await storage.appendCreditTransaction({
+        user_id: me.id,
+        amount_delta: 0,
+        balance_after: me.credits,
+        reason: FREE_FIRST_REPORT_REASON,
+        reference: `analysis:${id}`,
+        provider: null,
+        created_at: new Date().toISOString(),
+      });
+      const unlocked = await storage.unlockAnalysis(id);
+      await logServerEvent({
+        name: "free_full_report_claimed",
+        user_id: me.id,
+        props: { analysis_id: id },
+      });
+      return res.json(unlocked);
+    }
+
     if (!unlimited && me.credits <= 0) {
       return res.status(402).json({
         error: "You don\u2019t have any credits left. Buy a credit pack to unlock this report.",
@@ -1907,6 +1944,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         to: recipient,
         rating: parsed.data.rating,
         comment: parsed.data.comment || "",
+        worth_paying_for: parsed.data.worth_paying_for || "",
         user_id: me?.id ?? null,
         user_email: me?.email ?? null,
         job_title,
