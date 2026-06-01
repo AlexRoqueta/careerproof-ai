@@ -25,8 +25,6 @@ import { useToast } from "@/hooks/use-toast";
 import { track, EVENTS, getUnlockVariant } from "@/lib/analytics";
 import { writeAnonPreviewToken, type AnonPreviewPayload } from "@/lib/anonPreview";
 import { useLaunchPromo } from "@/hooks/useLaunchPromo";
-import { formatCents } from "@shared/launchPromo";
-import { LaunchPromoCounter } from "@/components/LaunchPromoCounter";
 
 /**
  * AnonymousAnalyze — the new top-of-funnel for unauthenticated visitors.
@@ -411,29 +409,21 @@ const AnonymousPreviewView = ({
     score >= 70 ? "from-rose-300 to-red-400" : score >= 40 ? "from-amber-300 to-orange-400" : "from-emerald-300 to-teal-400";
   const label =
     score >= 70 ? "High exposure" : score >= 40 ? "Moderate–High exposure" : "Lower exposure";
-  const { active: promoActive, promo, copy: promoCopy } = useLaunchPromo();
-  const promoPrice = promo ? formatCents(promo.promo_price_cents) : "$1";
-  const regularPrice = promo ? formatCents(promo.regular_price_cents) : "$3";
   const variant = getUnlockVariant();
   // A/B copy for the unlock conversion surface.
   //   A — value comparison: anchor on what a coach review costs ($75–$300+/hr)
-  //       versus the role-specific report price.
-  //   B — action/urgency: emphasize exposed tasks, skills, 30/60/90 plan,
-  //       and the launch promo slot scarcity.
+  //       versus the free first report.
+  //   B — action/urgency: emphasize exposed tasks, skills, 30/60/90 plan.
   const variantCopy = variant === "A"
     ? {
         headline_lead: "A career-coach review can run $75–$300+ per hour.",
         secondary:
-          promoActive
-            ? `CareerProof AI gives you a role-specific AI Exposure Report for ${promoPrice} today (regular ${regularPrice}). Directional career-risk insight, not a guarantee.`
-            : `CareerProof AI gives you a role-specific AI Exposure Report for ${regularPrice}. Directional career-risk insight, not a guarantee.`,
+          "CareerProof AI gives you a role-specific AI Exposure Report — your first one free. Directional career-risk insight, not a guarantee.",
       }
     : {
         headline_lead: "See the exposed tasks, the skills to build, and a 30/60/90-day plan.",
         secondary:
-          promoActive
-            ? `Launch spots are limited — ${promoPrice} today while they last (regular ${regularPrice}). Use this to plan, not to panic.`
-            : `One credit (${regularPrice}) unlocks the full plan. Use it to plan, not to panic.`,
+          "Your first full report is free — no credit card required. Use it to plan, not to panic.",
       };
 
   return (
@@ -452,38 +442,25 @@ const AnonymousPreviewView = ({
           <Sparkles className="w-4 h-4" />
           <AlertTitle>Your free AI job-risk preview is ready.</AlertTitle>
           <AlertDescription>
-            This preview is yours — no account needed.{" "}
             <strong>Create a free account</strong> to save it, connect a resume or LinkedIn
-            profile for a more accurate read, or unlock the complete roadmap.
-            {promoActive
-              ? ` Launch offer: first ${promo?.limit ?? 50} customers unlock the full report for ${promoPrice} (regular ${regularPrice}).`
-              : " Less than a latte — $3 (one credit)."}
+            profile for a more accurate read, and unlock your first full AI Exposure Report
+            free. No credit card required.
           </AlertDescription>
         </Alert>
-        {promoActive && (
-          <Alert
-            data-testid="banner-launch-promo"
-            className="border-cyan-400/40 bg-gradient-to-r from-cyan-500/15 via-sky-500/15 to-violet-500/15"
-          >
-            <Sparkles className="w-4 h-4" />
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="min-w-0">
-                <AlertTitle>
-                  {promoCopy?.headline ??
-                    `Launch offer: First ${promo?.limit ?? 50} customers unlock the full AI Exposure Report for ${promoPrice}. Regular price ${regularPrice}.`}
-                </AlertTitle>
-                <AlertDescription>
-                  {promoCopy?.includes_line ??
-                    "Includes your AI exposure score, vulnerable tasks, skills to build, and a 30/60/90-day action plan."}
-                </AlertDescription>
-              </div>
-              <LaunchPromoCounter
-                data-testid="text-launch-promo-remaining-anon"
-                className="shrink-0"
-              />
-            </div>
-          </Alert>
-        )}
+        <Alert
+          data-testid="banner-free-first"
+          className="border-emerald-400/40 bg-gradient-to-r from-emerald-500/15 via-cyan-500/15 to-sky-500/15"
+        >
+          <Sparkles className="w-4 h-4" />
+          <div className="min-w-0">
+            <AlertTitle>Your first full report is free.</AlertTitle>
+            <AlertDescription>
+              Includes your AI exposure score, vulnerable tasks, skills to build, and a
+              30/60/90-day action plan. No credit card required — additional reports for
+              other roles are $3 each ($7 for 3, $10 for 5).
+            </AlertDescription>
+          </div>
+        </Alert>
 
         <Card className="rounded-2xl border-border/60 bg-card/80 backdrop-blur p-5 sm:p-7">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -574,9 +551,7 @@ const AnonymousPreviewView = ({
               className="bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 hover:from-cyan-300 hover:to-sky-400 font-semibold"
             >
               <Sparkles className="w-4 h-4 mr-2" />
-              {promoActive
-                ? `Unlock My Report for ${promoPrice}`
-                : `Unlock My Full Report for ${regularPrice}`}
+              Unlock My Full Report — Free
             </Button>
             <Button
               size="lg"
@@ -590,9 +565,8 @@ const AnonymousPreviewView = ({
           </div>
           <p className="mt-3 text-[11px] text-muted-foreground">
             <ShieldCheck className="w-3 h-3 inline mr-1" />
-            {promoActive
-              ? `Launch offer: ${promoPrice} today, regular ${regularPrice}. No subscription.`
-              : "Unlock the full report for less than a latte — $3 (one credit). No subscription."}
+            Your first full report is free — no credit card required. Additional reports from
+            $3. No subscription.
             {" "}Your preview is saved to your account as soon as you sign up — no need to
             re-enter anything.
           </p>
