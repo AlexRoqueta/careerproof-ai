@@ -1,10 +1,17 @@
 # CareerProof AI — robots.txt
-# Allow crawling of all public pages. The app is a single-page application
-# served from `/`; private app routes are gated behind authentication and
-# are not meaningful for indexing.
+# Public SEO pages live at clean (non-hash) URLs and are fully crawlable.
+# Private app routes are gated behind authentication and are not useful for
+# indexing, so they are disallowed below. The SPA's hash routes (/#/...) are
+# never crawled as canonical URLs.
 
 User-agent: *
 Allow: /
+Allow: /ai-job-risk-assessment
+Allow: /will-ai-replace-my-job
+Allow: /jobs-at-risk-from-ai
+Allow: /future-proof-your-career
+Allow: /sample-report
+Allow: /pricing
 Disallow: /api/
 Disallow: /admin
 Disallow: /profile
@@ -12,7 +19,7 @@ Disallow: /history
 Disallow: /resumes
 Disallow: /credits
 
-# Allow major AI search and answer crawlers
+# Allow major search and AI answer crawlers
 User-agent: Googlebot
 Allow: /
 

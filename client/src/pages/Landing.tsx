@@ -951,6 +951,14 @@ function Footer() {
           <a href="/future-proof-your-career" className="hover:text-foreground transition">
             Future-proof your career
           </a>
+          <span aria-hidden className="opacity-40">·</span>
+          <a href="/sample-report" className="hover:text-foreground transition">
+            Sample report
+          </a>
+          <span aria-hidden className="opacity-40">·</span>
+          <a href="/pricing" className="hover:text-foreground transition">
+            Pricing
+          </a>
         </nav>
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">

@@ -8,6 +8,7 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "verify:seo": "tsx script/verify-seo.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

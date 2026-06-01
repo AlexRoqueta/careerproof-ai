@@ -20,4 +20,9 @@ export const SEO_PAGE_ROUTES: SeoPageRoute[] = [
   { path: "/will-ai-replace-my-job", file: "will-ai-replace-my-job.html" },
   { path: "/jobs-at-risk-from-ai", file: "jobs-at-risk-from-ai.html" },
   { path: "/future-proof-your-career", file: "future-proof-your-career.html" },
+  // Clean public URLs for the sample report and pricing. The bare path
+  // (no #) resolves to pre-rendered HTML for crawlers and direct nav;
+  // the in-app SPA still owns the hash routes (#/sample-report etc.).
+  { path: "/sample-report", file: "sample-report.html" },
+  { path: "/pricing", file: "pricing.html" },
 ];
