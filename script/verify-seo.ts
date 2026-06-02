@@ -137,6 +137,102 @@ function checkPage(file: string, canonicalPath: string) {
 
 for (const route of SEO_PAGE_ROUTES) checkPage(route.file, route.path);
 
+// --- JSON-LD structured-data policy -------------------------------------
+//
+// CareerProof is a digital SaaS tool, not a physical-goods merchant. We
+// deliberately model it as SoftwareApplication/WebApplication with Offer
+// pricing — NOT schema.org/Product. A bare Product makes Google treat the
+// page as a merchant listing / product snippet and demand
+// hasMerchantReturnPolicy, shippingDetails, aggregateRating, and review.
+// We have none of those legitimately (no physical shipping, no real
+// published reviews), so we must not emit Product, and we must never
+// fabricate aggregateRating/review to silence the warnings.
+//
+// This block parses every JSON-LD island and enforces that contract so a
+// future edit can't silently reintroduce the merchant/review warnings.
+
+function jsonLdBlocks(html: string): string[] {
+  return [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map(
+    (m) => m[1],
+  );
+}
+
+function collectTypes(node: unknown, out: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const n of node) collectTypes(n, out);
+    return;
+  }
+  if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    const t = obj["@type"];
+    if (typeof t === "string") out.add(t);
+    if (Array.isArray(t)) for (const x of t) if (typeof x === "string") out.add(x);
+    for (const v of Object.values(obj)) collectTypes(v, out);
+  }
+}
+
+function checkStructuredData(file: string, html: string) {
+  const tag = file;
+  const blocks = jsonLdBlocks(html);
+  if (blocks.length === 0) {
+    fail(`${tag}: no JSON-LD block found`);
+    return;
+  }
+  for (const raw of blocks) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      fail(`${tag}: JSON-LD is not valid JSON (${(e as Error).message})`);
+      continue;
+    }
+    const types = new Set<string>();
+    collectTypes(parsed, types);
+
+    // No physical-goods merchant schema on a digital SaaS tool.
+    if (types.has("Product")) {
+      fail(
+        `${tag}: JSON-LD uses schema.org/Product — CareerProof is a digital tool; ` +
+          `use SoftwareApplication/WebApplication with Offers instead (triggers ` +
+          `Merchant listing return/shipping warnings).`,
+      );
+    }
+
+    // Never fabricate ratings/reviews. Allowed only if real visible review
+    // content exists on the page — which it does not, so these are forbidden.
+    if (types.has("AggregateRating") || /"aggregateRating"\s*:/.test(raw)) {
+      fail(
+        `${tag}: JSON-LD contains aggregateRating but the site has no real published ` +
+          `reviews — do not fabricate ratings.`,
+      );
+    }
+    if (types.has("Review") || /"review"\s*:/.test(raw)) {
+      fail(
+        `${tag}: JSON-LD contains review but the site has no real published reviews — ` +
+          `do not fabricate reviews.`,
+      );
+    }
+
+    // Any Offer that DOES remain must use a digital-delivery friendly shape:
+    // it must not claim physical shipping, and it should expose price +
+    // currency + availability so Google reads clean pricing without a
+    // merchant-listing demand.
+    if (/"@type"\s*:\s*"Offer"/.test(raw)) {
+      if (/"shippingDetails"|OfferShippingDetails/.test(raw)) {
+        fail(
+          `${tag}: Offer declares shippingDetails — digital reports have no physical ` +
+            `shipping; remove it.`,
+        );
+      }
+    }
+  }
+}
+
+checkStructuredData("index.html", readFileSync(resolve(repoRoot, "client", "index.html"), "utf8"));
+for (const route of SEO_PAGE_ROUTES) {
+  checkStructuredData(`seo/${route.file}`, readFileSync(pub(`seo/${route.file}`), "utf8"));
+}
+
 // --- robots.txt ----------------------------------------------------------
 
 const robots = readFileSync(pub("robots.txt"), "utf8");
@@ -167,5 +263,6 @@ console.log("OK: SEO invariants present.");
 console.log(`  - sitemap.xml: valid XML, ${locs.length} clean URLs, all with <lastmod>, no '#'`);
 console.log("  - seo-pages.ts routes in sync with sitemap and HTML files");
 console.log("  - each SEO page: one H1, H2s, canonical, robots, OG/Twitter, JSON-LD");
+console.log("  - JSON-LD valid + no Product/aggregateRating/review (digital SaaS, no fake reviews)");
 console.log("  - robots.txt: sitemap reference + private routes blocked + public crawlable");
 console.log("  - og-image.png present");
